@@ -12,6 +12,7 @@ DATABASE_FILE = "truc_ban.db"
 
 # Cấu hình Telegram Bot
 TELEGRAM_BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
+ADMIN_IDS = ["YOUR_TELEGRAM_ID_HERE"] # Ví dụ: ["123456789"]
 
 # Cấu hình thời gian gửi thông báo
 NOTIFICATION_TIME = "15:00"

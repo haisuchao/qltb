@@ -53,78 +53,92 @@ Hệ thống yêu cầu file Excel phải đúng định dạng để có thể 
 4. **Vị trí file**:
    - Chép file Excel vào thư mục `lich-truc-ban` ngay trong thư mục dự án.
 
+### Bước 4: Cấu hình Facebook Messenger Bot (Tùy chọn)
+Nếu bạn muốn sử dụng Bot trên Facebook Messenger thay vì hoặc song song với Telegram:
+
+1. **Tạo Fanpage**: Tạo một trang Facebook mới để làm đại diện cho Bot.
+2. **Cài đặt Facebook App**:
+   - Truy cập [Facebook Developers](https://developers.facebook.com/), tạo App mới loại **"Other"** -> chọn **"Messenger"**.
+   - Trong phần cài đặt Messenger, nhấn **"Add or Remove Pages"** để kết nối Fanpage của bạn.
+   - Nhấn **"Generate Token"** để lấy mã truy cập trang và dán vào `FACEBOOK_PAGE_ACCESS_TOKEN` trong file `config.py`.
+3. **Cấu hình Webhook**:
+   - Để nhận tin nhắn, bạn cần một địa chỉ HTTPS công khai. Nếu chạy tại máy cá nhân, hãy dùng **Ngrok** (`ngrok http 5000`).
+   - Copy link HTTPS của Ngrok (VD: `https://abcd-123.ngrok-free.app/webhook`) và dán vào phần Webhook của Facebook App.
+   - **Verify Token**: Nhập chuỗi trùng với `FACEBOOK_VERIFY_TOKEN` trong `config.py` (mặc định là `my_secret_token_123`).
+   - Chọn các trường đăng ký (Subscription Fields): `messages`, `messaging_postbacks`.
+4. **Chạy Bot**: Chạy file `facebook_bot.py` để bắt đầu lắng nghe tin nhắn.
+
 ---
 
 ## 📋 2. CÁC LỆNH ĐIỀU KHIỂN BOT
 
-Sử dụng trực tiếp trong khung chat với Bot:
-
+### 🔹 Trên Telegram (Gõ lệnh có dấu `/`)
 | Lệnh | Mô tả | Ví dụ |
 | :--- | :--- | :--- |
 | `/start` | Khởi động Bot và xem menu lệnh | `/start` |
-| `/today` | Xem lịch trực hôm nay nhanh | `/today` |
-| `/tomorrow` | Xem lịch trực ngày mai nhanh | `/tomorrow` |
+| `/today` | Xem lịch trực hôm nay | `/today` |
+| `/tomorrow` | Xem lịch trực ngày mai | `/tomorrow` |
 | `/check` | Tra cứu lịch của một ngày bất kỳ | `/check 30/01/2026` |
-| `/search` | Tìm toàn bộ lịch trực của bạn trong tháng | `/search Nguyễn Văn A` |
-| `/register` | Đăng ký tài khoản để nhận thông báo tự động | `/register Nguyễn Văn A` |
-| `/change` | Thay đổi người trực cho một ca cụ thể | `/change 30/01/2026 sáng "Lê Văn B" "Đi công tác"` |
-| `/swap` | Hoán đổi ca trực giữa 2 người (2 ca bất kỳ) | `/swap 01/02/2026 sáng 02/02/2026 chiều` |
-| `/help` | Xem hướng dẫn sử dụng nhanh | `/help` |
+| `/search` | Tìm lịch trực của một người | `/search Nguyễn Văn A` |
+| `/register` | Đăng ký tài khoản nhận thông báo | `/register Nguyễn Văn A` |
+| `/change` | Thay đổi người trực cho một ca | `/change 30/01/2026 sáng "Lê Văn B"` |
+| `/swap` | Hoán đổi ca trực giữa 2 người | `/swap 01/02 sáng 02/02 chiều` |
 
-> [!TIP]
-> **Lưu ý về Họ tên:** Khi nhập tên người dùng trong lệnh `/change`, nếu tên có khoảng trắng, bạn nên để trong dấu ngoặc kép (Ví dụ: `"Nguyễn Văn A"`).
+### 🔹 Trên Facebook Messenger (Gõ từ khóa trực tiếp)
+| Từ khóa | Mô tả |
+| :--- | :--- |
+| `today` | Xem lịch trực hôm nay |
+| `tomorrow` | Xem lịch trực ngày mai |
+| `search [tên]` | Tìm lịch trực của ai đó (VD: `search Hải`) |
+| `register [Họ tên]` | Đăng ký nhận thông báo (VD: `register Nguyễn Đỗ Hải`) |
+| `auto_schedule` | (Admin) Xếp lịch tự động vòng tròn |
+| `help` | Xem hướng dẫn sử dụng |
 
 ---
 
-## 🔔 3. THÔNG BÁO TỰ ĐỘNG
-* **Thời gian**: Bot tự động gửi tin nhắn nhắc lịch vào lúc **15:00** hàng ngày cho những ai có lịch trực vào ngày hôm sau.
-* **Điều kiện**: Bạn cần chạy lệnh `/register [Họ tên]` một lần duy nhất để Bot biết bạn là ai và gửi tin nhắn riêng.
+## 📅 3. TỰ ĐỘNG XẾP LỊCH (ADMIN)
+Hệ thống hỗ trợ tính năng tự động xếp lịch theo vòng tròn (Round-robin) giúp tiết kiệm thời gian.
 
----
+**Đặc điểm:**
+* Dùng chung một danh sách cho cả ca Sáng và Chiều.
+* Tự động luân phiên: Nếu lần này trực Sáng, lần sau sẽ trực Chiều.
+* Tự động bỏ qua Thứ 7 và Chủ nhật.
+* Thêm Sheet mới vào file Excel đúng định dạng Template.
 
-## 🚀 4. VẬN HÀNH BOT
-Để Bot hoạt động, bạn chỉ cần chạy lệnh sau và giữ cho Terminal luôn mở:
+**Cách dùng (Trên Telegram):**
 ```bash
-python bot.py
+# Cách 1: Tên tự lấy từ sheet 'DS trực'
+/auto_schedule 3-2026 | Lãnh Đạo 1, Lãnh Đạo 2
+
+# Cách 2: Nhập danh sách tên thủ công
+/auto_schedule 3-2026 Nguyễn Văn A, Lê Văn B | Lãnh Đạo 1, Lãnh Đạo 2
 ```
-
-Nếu muốn chạy Bot ở chế độ chạy ngầm (trên Windows):
-1. Nhấn `Win + R`, gõ `cmd`.
-2. Gõ lệnh: `start /b python bot.py`
+*Lưu ý: Dùng dấu gạch đứng `|` để phân tách danh sách cán bộ và danh sách lãnh đạo. Nếu để trống phần trước dấu `|`, Bot sẽ tự động lấy danh sách từ sheet **'DS trực'** (trừ những người bị đánh dấu 'x' miễn trực).*
 
 ---
 
-## ❓ 5. CÂU HỎI THƯỜNG GẶP (FAQ)
-* **Q: Tại sao tôi không nhận được thông báo?**
-  * A: Bạn hãy kiểm tra xem đã dùng lệnh `/register` chưa, và đảm bảo Bot đang được chạy.
-* **Q: Bot báo lỗi "Không tìm thấy sheet"?**
-  * A: File Excel của bạn cần có các sheet tên theo dạng `m-yyyy` (Ví dụ: `1-2026`).
-* **Q: Đổi lịch trên Bot có cập nhật file Excel không?**
-  * A: Có. Bot sẽ tự cập nhật file Excel trực tiếp tại thư mục `lich-truc-ban`.
+## 🔔 4. THÔNG BÁO TỰ ĐỘNG
+* **Thời gian**: Hệ thống tự động kiểm tra và nhắc lịch vào lúc **15:00** hàng ngày cho ngày hôm sau.
+* **Đăng ký**: Cần chạy lệnh `register` (Facebook) hoặc `/register` (Telegram) một lần duy nhất.
+* **Facebook ID**: Khi đăng ký trên Facebook, hệ thống sẽ lưu ID của bạn với tiền tố `FB_` trong cơ sở dữ liệu.
 
 ---
 
-## 🏗 6. LÊN GITHUB & TRIỂN KHAI MÁY KHÁC
+## 🚀 5. VẬN HÀNH BOT
 
-Để đưa project lên GitHub và deploy sang máy tính khác, hãy làm theo các bước sau để đảm bảo an toàn (không bị lộ Token):
+- **Chạy Telegram Bot**: `python bot.py`
+- **Chạy Facebook Bot**: `python facebook_bot.py`
+- **Chạy đồng thời**: Bạn có thể mở 2 cửa sổ Terminal để chạy cả 2 bot cùng lúc.
 
-### Bước 1: Chuẩn bị repo (Tại máy gốc)
-1. Đảm bảo file `.gitignore` đã có `config.py`, `*.db` và `lich-truc-ban/*.xlsx`.
-2. Khởi tạo Git và push:
-   ```bash
-   git init
-   git add .
-   git commit -m "Initial commit - Duty Bot"
-   # Sau đó tạo repo trên GitHub và làm theo hướng dẫn để push
-   ```
+---
 
-### Bước 2: Triển khai trên máy mới
-1. Tải project từ GitHub về máy mới.
-2. Cài đặt Python và thư viện: `pip install -r requirements.txt`.
-3. **Quan trọng**: Tạo lại các file bị ẩn (vì không được push lên GitHub):
-   - Copy file `config_example.py` thành `config.py` và điền lại thông tin Bot Token.
-   - Đảm bảo trong thư mục có thư mục `lich-truc-ban`.
-4. Run Bot: `python bot.py`.
+## ❓ 6. CÂU HỎI THƯỜNG GẶP (FAQ)
+* **Q: Có cần cấu hình gì trên Facebook không?**
+  - A: Có, bạn cần cấu hình Webhook và Token trên Facebook Developer Portal như hướng dẫn ở Bước 4.
+* **Q: Dùng chung 1 file Excel và Database không?**
+  - A: Có. Cả hai nền tảng đều truy xuất chung dữ liệu từ file Excel trong thư mục `lich-truc-ban` và database `truc_ban.db`.
+* **Q: Làm sao để lấy FB PSID của tôi?**
+  - A: Bạn chỉ cần gõ lệnh `register [Tên]` trên Messenger, Bot sẽ trả về PSID của bạn sau khi đăng ký thành công.
 
 ---
 *Chúc bạn quản lý trực ban hiệu quả!*

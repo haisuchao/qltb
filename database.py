@@ -99,6 +99,16 @@ class DatabaseManager:
         conn.close()
         return result
     
+    def get_officer_by_telegram_id(self, telegram_id):
+        """Lấy thông tin cán bộ qua Telegram ID"""
+        conn = sqlite3.connect(self.db_file)
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM officers_contact WHERE telegram_id = ?', (str(telegram_id),))
+        result = cursor.fetchone()
+        conn.close()
+        return result
+
+    
     def get_notification_history(self, start_date=None, end_date=None):
         """Lấy lịch sử thông báo"""
         conn = sqlite3.connect(self.db_file)

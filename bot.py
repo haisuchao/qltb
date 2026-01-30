@@ -167,6 +167,12 @@ class DutyBot:
     # --- Background Job ---
     async def manual_notification(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Gửi thông báo thủ công: /send_noti dd/mm/yyyy [sáng/chiều]"""
+        # Kiểm tra quyền Admin
+        user_id = str(update.effective_user.id)
+        if hasattr(config, 'ADMIN_IDS') and user_id not in config.ADMIN_IDS:
+             await update.message.reply_text("⛔ Bạn không có quyền thực hiện lệnh này. Chỉ Admin mới có quyền gửi thông báo thủ công.")
+             return
+
         try:
             if not context.args:
                 await update.message.reply_text("❌ Vui lòng nhập ngày. Ví dụ: /send_noti 30/01/2026 [sáng/chiều]")
@@ -257,11 +263,25 @@ class DutyBot:
                 await update.message.reply_text("❌ Vui lòng nhập tên người cần tìm. Ví dụ: /tim_lich An")
                 return
 
-            # Xử lý input: args ở đây coi như là tên người đầy đủ
-            # Yêu cầu: Người dùng nhập tên, hệ thống tự lấy tháng hiện tại.
-            
-            name_query = " ".join(context.args)
+            # Xử lý input: Tên_người [tháng/năm]
+            args = context.args
             search_date = datetime.now()
+            
+            # Thử kiểm tra xem đối số cuối cùng có phải là tháng/năm (m/yyyy hoặc mm/yyyy)
+            last_arg = args[-1]
+            if '/' in last_arg:
+                parts = last_arg.split('/')
+                if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                    try:
+                        month = int(parts[0])
+                        year = int(parts[1])
+                        if 1 <= month <= 12:
+                            search_date = datetime(year, month, 1)
+                            args = args[:-1] # Loại bỏ phần ngày tháng khỏi tên
+                    except ValueError:
+                        pass # Nếu không parse được thì coi như là một phần của tên
+            
+            name_query = " ".join(args).strip()
             
             if len(name_query) < 2:
                  await update.message.reply_text("⚠️ Vui lòng nhập họ tên đầy đủ (ít nhất 2 ký tự).")
@@ -339,6 +359,39 @@ class DutyBot:
                 await update.message.reply_text("❌ Ca trực không hợp lệ. Dùng 'sáng' hoặc 'chiều'")
                 return
 
+            # --- KIỂM TRA QUYỀN ĐỔI CA ---
+            user_id = str(update.effective_user.id)
+            is_admin = hasattr(config, 'ADMIN_IDS') and user_id in config.ADMIN_IDS
+            
+            if not is_admin:
+                # Lấy tên người yêu cầu từ Database
+                requester = self.db.get_officer_by_telegram_id(user_id)
+                if not requester:
+                    await update.message.reply_text("❌ Bạn chưa đăng ký tài khoản. Vui lòng dùng lệnh /register [Họ tên] trước.")
+                    return
+                
+                requester_name = requester[1].lower().strip()
+                
+                # Lấy thông tin 2 ca trực cần đổi
+                duty1 = self.schedule_mgr.get_duty_info_for_date(date1)
+                duty2 = self.schedule_mgr.get_duty_info_for_date(date2)
+                
+                if not duty1 or not duty2:
+                    await update.message.reply_text("❌ Không tìm thấy thông tin lịch trực để xác thực quyền.")
+                    return
+                
+                officer1 = str(duty1['morning_officer'] if shift1 == 'sáng' else duty1['afternoon_officer']).lower().strip()
+                officer2 = str(duty2['morning_officer'] if shift2 == 'sáng' else duty2['afternoon_officer']).lower().strip()
+                
+                # Kiểm tra người gửi có là 1 trong 2 người trực không
+                if requester_name != officer1 and requester_name != officer2:
+                    await update.message.reply_text(
+                        f"⛔ Bạn không có quyền đổi hai ca này.\n"
+                        f"Yêu cầu đổi ca phải do chính chủ thực hiện (Đ/c {officer1} hoặc {officer2})."
+                    )
+                    return
+            # -----------------------------
+
             # Gọi logic đổi ca
             user_info = update.effective_user.full_name
             success, message = self.schedule_mgr.swap_shifts(date1, shift1, date2, shift2, changed_by=user_info)
@@ -396,6 +449,92 @@ class DutyBot:
         
         logger.info(f"Daily notification job finished. Sent {sent_count} messages.")
 
+    async def stats_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Thống kê chi tiết cho Admin: /stats"""
+        # Kiểm tra quyền Admin
+        user_id = str(update.effective_user.id)
+        if hasattr(config, 'ADMIN_IDS') and user_id not in config.ADMIN_IDS:
+             await update.message.reply_text("⛔ Bạn không có quyền thực hiện lệnh này.")
+             return
+
+        await update.message.reply_text("📊 Đang tổng hợp dữ liệu thống kê từ tất cả các tháng, vui lòng chờ trong giây lát...")
+        
+        success, message = self.schedule_mgr.generate_full_report()
+        
+        if success:
+            # Gửi file Excel đã cập nhật cho Admin
+            filepath = self.schedule_mgr.get_master_schedule_path()
+            try:
+                with open(filepath, 'rb') as doc:
+                    await update.message.reply_document(
+                        document=doc,
+                        filename="Bao_Cao_Thong_Ke.xlsx",
+                        caption=f"✅ {message}\nBảng thống kê đã được thêm vào sheet đầu tiên của file Excel."
+                    )
+            except Exception as e:
+                await update.message.reply_text(f"❌ Lỗi khi gửi file: {str(e)}")
+        else:
+            await update.message.reply_text(f"❌ Lỗi khi tạo thống kê: {message}")
+
+    async def auto_schedule_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Xếp lịch tự động: /auto_schedule [m-yyyy] [danh_sách_cán_bộ] | [danh_sách_lãnh_đạo]"""
+        user_id = str(update.effective_user.id)
+        if hasattr(config, 'ADMIN_IDS') and user_id not in config.ADMIN_IDS:
+             await update.message.reply_text("⛔ Bạn không có quyền thực hiện lệnh này.")
+             return
+
+        if not context.args:
+            await update.message.reply_text(
+                "⚠️ Cách dùng 1 (Lấy tên từ DS trực): /auto_schedule [m-yyyy] | [Lãnh đạo]\n"
+                "Ví dụ: /auto_schedule 3-2026 | Lãnh Đạo A, Lãnh Đạo B\n\n"
+                "⚠️ Cách dùng 2 (Nhập tên thủ công): /auto_schedule [m-yyyy] [Tên_A, Tên_B] | [Lãnh đạo]\n"
+                "Ví dụ: /auto_schedule 3-2026 Hải, Việt | Lãnh Đạo A"
+            )
+            return
+
+        try:
+            full_text = " ".join(context.args)
+            month_year = context.args[0]
+            
+            # Phần còn lại sau month_year
+            content = full_text.replace(month_year, "", 1).strip()
+            
+            if '|' in content:
+                parts = content.split('|')
+                names_str = parts[0].strip()
+                leaders_str = parts[1].strip()
+                
+                names = [n.strip() for n in names_str.split(',') if n.strip()] if names_str else None
+                leaders = [n.strip() for n in leaders_str.split(',') if n.strip()]
+            else:
+                # Nếu không có dấu |, coi như chỉ nhập tháng (lỗi hoặc thiếu)
+                await update.message.reply_text("❌ Vui lòng cung cấp danh sách lãnh đạo sau dấu gạch đứng '|'.")
+                return
+            
+            if not leaders:
+                await update.message.reply_text("❌ Thiếu danh sách lãnh đạo.")
+                return
+
+            await update.message.reply_text(f"⏳ Đang tự động xếp lịch vòng tròn cho tháng {month_year}...")
+            
+            success, message = self.schedule_mgr.auto_generate_round_robin(month_year, names, leaders)
+            
+            if success:
+                 # Gửi file Excel cho Admin kiểm tra
+                filepath = self.schedule_mgr.get_master_schedule_path()
+                with open(filepath, 'rb') as doc:
+                    await update.message.reply_document(
+                        document=doc,
+                        filename=f"Lich_Truc_{month_year}.xlsx",
+                        caption=f"✅ {message}\nBạn hãy kiểm tra sheet '{month_year}' trong file đính kèm."
+                    )
+            else:
+                await update.message.reply_text(f"❌ Lỗi: {message}")
+
+        except Exception as e:
+            logger.error(f"Error in auto_schedule: {e}")
+            await update.message.reply_text(f"❌ Có lỗi xảy ra: {str(e)}")
+
 
 if __name__ == '__main__':
     if 'YOUR_TELEGRAM_BOT_TOKEN' in config.TELEGRAM_BOT_TOKEN:
@@ -417,6 +556,8 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("search", bot_logic.find_schedule))
     app.add_handler(CommandHandler("register", bot_logic.register_user))
     app.add_handler(CommandHandler("swap", bot_logic.swap_schedule))
+    app.add_handler(CommandHandler("stats", bot_logic.stats_command))
+    app.add_handler(CommandHandler("auto_schedule", bot_logic.auto_schedule_command))
     
     # Job Queue
     job_queue = app.job_queue
