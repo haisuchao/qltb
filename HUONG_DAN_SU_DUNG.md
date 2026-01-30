@@ -50,22 +50,8 @@ Hệ thống yêu cầu file Excel phải đúng định dạng để có thể 
    > [!IMPORTANT]
    > Dữ liệu cán bộ phải bắt đầu từ **Dòng 5** trở đi (Dòng 4 là tiêu đề cột).
 
-3. **Tải lên Google Drive**:
-   - Truy cập [Google Drive](https://drive.google.com/).
-   - Nhấn **Mới** -> **Tải tệp lên** -> Chọn file Excel vừa tạo.
-   - Chuột phải vào file vừa tải lên -> **Chia sẻ** -> **Chia sẻ**.
-   - Copy Email của Service Account (từ bước 4) vào ô người nhận -> Chọn quyền **Người chỉnh sửa (Editor)** -> **Gửi**.
-   - Copy **ID file** từ thanh địa chỉ (đoạn mã nằm giữa `/d/` và `/edit`) và dán vào `config.py`.
-
-### Bước 4: Cấu hình Google Drive (Bắt buộc để đồng bộ)
-1. Để Bot có thể đọc lịch từ file Excel trên Drive, bạn cần file `credentials.json`.
-2. Truy cập [Google Cloud Console](https://console.cloud.google.com/), tạo project và bật **Google Drive API**.
-3. Tạo **Service Account**, tải Key dưới dạng JSON, đổi tên thành `credentials.json` và chép vào thư mục gốc của Bot.
-4. Copy Email của Service Account và **Chia sẻ quyền Chỉnh sửa (Editor)** cho file Excel lịch trực của bạn trên Google Drive.
-5. Lấy ID file Excel (đoạn mã trên thanh địa chỉ giữa `/d/` và `/edit`) và dán vào `config.py`:
-   ```python
-   DRIVE_FILE_ID = "ID_FILE_EXCEL_CỦA_BẠN"
-   ```
+4. **Vị trí file**:
+   - Chép file Excel vào thư mục `lich-truc-ban` ngay trong thư mục dự án.
 
 ---
 
@@ -114,7 +100,7 @@ Nếu muốn chạy Bot ở chế độ chạy ngầm (trên Windows):
 * **Q: Bot báo lỗi "Không tìm thấy sheet"?**
   * A: File Excel của bạn cần có các sheet tên theo dạng `m-yyyy` (Ví dụ: `1-2026`).
 * **Q: Đổi lịch trên Bot có cập nhật file Excel không?**
-  * A: Có. Bot sẽ tự cập nhật file Excel cục bộ và đồng bộ ngược lên Google Drive ngay lập tức.
+  * A: Có. Bot sẽ tự cập nhật file Excel trực tiếp tại thư mục `lich-truc-ban`.
 
 ---
 
@@ -123,7 +109,7 @@ Nếu muốn chạy Bot ở chế độ chạy ngầm (trên Windows):
 Để đưa project lên GitHub và deploy sang máy tính khác, hãy làm theo các bước sau để đảm bảo an toàn (không bị lộ Token):
 
 ### Bước 1: Chuẩn bị repo (Tại máy gốc)
-1. Đảm bảo file `.gitignore` đã có `config.py`, `credentials.json`, `*.db` và `lich-truc-ban/*.xlsx`.
+1. Đảm bảo file `.gitignore` đã có `config.py`, `*.db` và `lich-truc-ban/*.xlsx`.
 2. Khởi tạo Git và push:
    ```bash
    git init
@@ -136,8 +122,7 @@ Nếu muốn chạy Bot ở chế độ chạy ngầm (trên Windows):
 1. Tải project từ GitHub về máy mới.
 2. Cài đặt Python và thư viện: `pip install -r requirements.txt`.
 3. **Quan trọng**: Tạo lại các file bị ẩn (vì không được push lên GitHub):
-   - Copy file `config_example.py` thành `config.py` và điền lại thông tin Bot Token, Drive ID.
-   - Chép file `credentials.json` của bạn vào cùng thư mục.
+   - Copy file `config_example.py` thành `config.py` và điền lại thông tin Bot Token.
    - Đảm bảo trong thư mục có thư mục `lich-truc-ban`.
 4. Run Bot: `python bot.py`.
 

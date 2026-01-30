@@ -7,13 +7,11 @@ import glob
 from datetime import datetime, timedelta
 import config
 from database import DatabaseManager
-from drive_client import DriveClient
+
 
 class ScheduleManager:
     def __init__(self):
         self.db = DatabaseManager()
-        self.drive = DriveClient()
-        self.use_drive = hasattr(config, 'DRIVE_FILE_ID') and config.DRIVE_FILE_ID != "YOUR_DRIVE_FILE_ID_HERE"
     
     def get_schedule_sheet_name(self, date):
         """Lấy tên sheet tương ứng với tháng của ngày cần tra cứu"""
@@ -21,17 +19,8 @@ class ScheduleManager:
         return f"{date.month}-{date.year}"
     
     
-    def sync_from_drive(self):
-        """Tải file mới nhất từ Drive về"""
-        if not self.use_drive:
-            return False
-            
-        local_path = self.get_master_schedule_path()
-        if not local_path:
-             local_path = os.path.join(config.SCHEDULE_FOLDER, config.MASTER_SCHEDULE_FILE)
-             
-        print("Đang đồng bộ từ Drive...")
-        return self.drive.download_file(config.DRIVE_FILE_ID, local_path)
+    # Removed sync_from_drive logic for faster response
+    
 
     def get_master_schedule_path(self):
         """Lấy đường dẫn file lịch trực tổng hợp"""
@@ -91,10 +80,6 @@ class ScheduleManager:
     
     def get_duty_info_for_date(self, date):
         """Lấy thông tin trực ban cho một ngày cụ thể"""
-        # Nếu dùng Drive, thử sync trước khi đọc
-        if self.use_drive:
-            self.sync_from_drive()
-            
         df = self.read_schedule_for_date(date)
         
         if df is None:
@@ -164,11 +149,7 @@ class ScheduleManager:
              # Lưu ý: openpyxl index bắt đầu từ 1.
              # Pandas read_excel header=3 nghĩa là dữ liệu bắt đầu từ row 5 (index 4 trong 0-based của list, nhưng row 5 trong Excel)
              
-             # Pull latest version first to avoid conflicts
-             if self.use_drive:
-                 self.sync_from_drive()
-
-             # Cách an toàn nhất: Dùng openpyxl trực tiếp để load và save bảo toàn định dạng
+             # Cập nhật trực tiếp trên file local
              from openpyxl import load_workbook
              
              wb = load_workbook(filepath, data_only=True)
@@ -236,11 +217,6 @@ class ScheduleManager:
              cell_to_edit.value = new_officer
              
              wb.save(filepath)
-             
-             # Push to Drive
-             if self.use_drive:
-                 print("Đang đẩy lên Drive...")
-                 self.drive.upload_file(config.DRIVE_FILE_ID, filepath)
              
              # Log
              self.db.log_schedule_change(
@@ -315,10 +291,6 @@ class ScheduleManager:
         if date is None:
             date = datetime.now()
             
-        # Đảm bảo có dữ liệu mới nhất
-        if self.use_drive:
-            self.sync_from_drive()
-            
         df = self.read_schedule_for_date(date)
         if df is None:
             return []
@@ -368,85 +340,78 @@ class ScheduleManager:
             return False, "Không tìm thấy file lịch trực"
             
         try:
-             # Sync before change
-             if self.use_drive:
-                 self.sync_from_drive()
+            from openpyxl import load_workbook
+            # Load with data_only=True to read formula values as dates
+            wb = load_workbook(filepath, data_only=True)
+            
+            # Sheets for both dates
+            sheet_name1 = self.get_schedule_sheet_name(date1)
+            sheet_name2 = self.get_schedule_sheet_name(date2)
+            
+            if sheet_name1 not in wb.sheetnames or sheet_name2 not in wb.sheetnames:
+                return False, "Không tìm thấy sheet tương ứng với tháng/năm"
 
-             from openpyxl import load_workbook
-             # Load with data_only=True to read formula values as dates
-             wb = load_workbook(filepath, data_only=True)
-             
-             # Sheets for both dates
-             sheet_name1 = self.get_schedule_sheet_name(date1)
-             sheet_name2 = self.get_schedule_sheet_name(date2)
-             
-             if sheet_name1 not in wb.sheetnames or sheet_name2 not in wb.sheetnames:
-                 return False, "Không tìm thấy sheet tương ứng với tháng/năm"
+            ws1 = wb[sheet_name1]
+            ws2 = wb[sheet_name2]
+            
+            target_date_str1 = date1.strftime('%d/%m/%Y')
+            target_date_str2 = date2.strftime('%d/%m/%Y')
+            
+            row1_idx = None
+            row2_idx = None
+            
+            # Helper to normalize date and find row
+            def find_row_idx(ws, target_str):
+                for i, row in enumerate(ws.iter_rows(min_row=5), start=5):
+                    cell_val = row[0].value
+                    cell_date_str = None
+                    if isinstance(cell_val, datetime):
+                        cell_date_str = cell_val.strftime('%d/%m/%Y')
+                    elif isinstance(cell_val, str):
+                        cell_val_clean = cell_val.strip()
+                        for fmt in ('%d/%m/%Y', '%Y/%m/%d', '%Y-%m-%d'):
+                            try:
+                                cell_date_str = datetime.strptime(cell_val_clean, fmt).strftime('%d/%m/%Y')
+                                break
+                            except ValueError: continue
+                        if not cell_date_str: cell_date_str = cell_val_clean
+                    if cell_date_str == target_str:
+                        return i
+                return None
 
-             ws1 = wb[sheet_name1]
-             ws2 = wb[sheet_name2]
-             
-             target_date_str1 = date1.strftime('%d/%m/%Y')
-             target_date_str2 = date2.strftime('%d/%m/%Y')
-             
-             row1_idx = None
-             row2_idx = None
-             
-             # Helper to normalize date and find row
-             def find_row_idx(ws, target_str):
-                 for i, row in enumerate(ws.iter_rows(min_row=5), start=5):
-                     cell_val = row[0].value
-                     cell_date_str = None
-                     if isinstance(cell_val, datetime):
-                         cell_date_str = cell_val.strftime('%d/%m/%Y')
-                     elif isinstance(cell_val, str):
-                         cell_val_clean = cell_val.strip()
-                         for fmt in ('%d/%m/%Y', '%Y/%m/%d', '%Y-%m-%d'):
-                             try:
-                                 cell_date_str = datetime.strptime(cell_val_clean, fmt).strftime('%d/%m/%Y')
-                                 break
-                             except ValueError: continue
-                         if not cell_date_str: cell_date_str = cell_val_clean
-                     if cell_date_str == target_str:
-                         return i
-                 return None
+            row1_idx = find_row_idx(ws1, target_date_str1)
+            row2_idx = find_row_idx(ws2, target_date_str2)
 
-             row1_idx = find_row_idx(ws1, target_date_str1)
-             row2_idx = find_row_idx(ws2, target_date_str2)
+            if not row1_idx or not row2_idx:
+                return False, "Không tìm thấy ngày trực trong lịch"
 
-             if not row1_idx or not row2_idx:
-                 return False, "Không tìm thấy ngày trực trong lịch"
-
-             # Identify columns: C=3 (morning), D=4 (afternoon)
-             col1 = 3 if shift1 == 'sáng' else 4
-             col2 = 3 if shift2 == 'sáng' else 4
-             
-             officer1 = ws1.cell(row=row1_idx, column=col1).value
-             officer2 = ws2.cell(row=row2_idx, column=col2).value
-             
-             # Swap values
-             ws1.cell(row=row1_idx, column=col1, value=officer2)
-             ws2.cell(row=row2_idx, column=col2, value=officer1)
-             
-             wb.save(filepath)
-             
-             if self.use_drive:
-                 self.drive.upload_file(config.DRIVE_FILE_ID, filepath)
-                 
-             # Log changes
-             self.db.log_schedule_change(
-                 duty_date=target_date_str1, shift=shift1,
-                 old_officer=str(officer1), new_officer=str(officer2),
-                 reason="Đổi chéo ca", approved_by=changed_by
-             )
-             self.db.log_schedule_change(
-                 duty_date=target_date_str2, shift=shift2,
-                 old_officer=str(officer2), new_officer=str(officer1),
-                 reason="Đổi chéo ca", approved_by=changed_by
-             )
-             
-             return True, f"Đã đổi '{officer1}' ({target_date_str1} {shift1}) với '{officer2}' ({target_date_str2} {shift2})"
-             
+            # Identify columns: C=3 (morning), D=4 (afternoon)
+            col1 = 3 if shift1 == 'sáng' else 4
+            col2 = 3 if shift2 == 'sáng' else 4
+            
+            officer1 = ws1.cell(row=row1_idx, column=col1).value
+            officer2 = ws2.cell(row=row2_idx, column=col2).value
+            
+            # Swap values
+            ws1.cell(row=row1_idx, column=col1, value=officer2)
+            ws2.cell(row=row2_idx, column=col2, value=officer1)
+            
+            wb.save(filepath)
+            
+            # Log changes
+            self.db.log_schedule_change(
+                duty_date=target_date_str1, shift=shift1,
+                old_officer=str(officer1), new_officer=str(officer2),
+                reason="Đổi chéo ca", approved_by=changed_by
+            )
+            self.db.log_schedule_change(
+                duty_date=target_date_str2, shift=shift2,
+                old_officer=str(officer2), new_officer=str(officer1),
+                reason="Đổi chéo ca", approved_by=changed_by
+            )
+            
+            return True, f"Đã đổi '{officer1}' ({target_date_str1} {shift1}) với '{officer2}' ({target_date_str2} {shift2})"
+            
         except Exception as e:
             print(f"Lỗi swap: {e}")
             return False, str(e)

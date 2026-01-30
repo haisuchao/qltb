@@ -13,10 +13,6 @@ DATABASE_FILE = "truc_ban.db"
 # Cấu hình Telegram Bot
 TELEGRAM_BOT_TOKEN = "YOUR_BOT_TOKEN_HERE"
 
-# Google Drive Config
-GOOGLE_APPLICATION_CREDENTIALS = "credentials.json"
-DRIVE_FILE_ID = "YOUR_DRIVE_FILE_ID_HERE"
-
 # Cấu hình thời gian gửi thông báo
 NOTIFICATION_TIME = "15:00"
 
