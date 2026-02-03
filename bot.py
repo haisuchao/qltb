@@ -1,7 +1,7 @@
 
 import logging
 import asyncio
-from datetime import datetime, time
+from datetime import datetime, time, timezone, timedelta
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, ConversationHandler, MessageHandler, filters
 import config
@@ -21,6 +21,12 @@ logging.basicConfig(
 
 logger = logging.getLogger(__name__)
 
+# Silence noisy httpx logs
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
+# Múi giờ Việt Nam (UTC+7)
+VN_TZ = timezone(timedelta(hours=7))
+
 class DutyBot:
     def __init__(self):
         self.schedule_mgr = ScheduleManager()
@@ -30,30 +36,47 @@ class DutyBot:
         await update.message.reply_text(
             "Chào mừng bạn đến với Bot Quản lý Trực ban!\n"
             "Các lệnh có sẵn:\n"
-            "/today - Xem lịch trực hôm nay\n"
-            "/tomorrow - Xem lịch trực ngày mai\n"
-            "/check - Xem lịch ngày cụ thể (VD: /check 30/01/2026)\n"
-            "/change - Đổi lịch trực (Tên mới & lý do)\n"
-            "/swap - Hoán đổi 2 ca trực cho nhau\n"
-            "/search - Tìm lịch cá nhân\n"
-            "/register - Đăng ký nhận thông báo\n"
-            "/help - Xem trợ giúp"
+            "🔹 /today - Xem lịch trực hôm nay\n"
+            "🔹 /tomorrow - Xem lịch trực ngày mai\n"
+            "🔹 /check - Tra cứu lịch theo ngày\n"
+            "   <i>VD: /check 30/01/2026</i>\n"
+            "🔹 /search - Tìm lịch cá nhân\n"
+            "   <i>VD: /search Nguyễn Văn A</i>\n"
+            "🔹 /change - Đổi người trực (1 ca)\n"
+            "   <i>VD: /change 01/05/2026 sáng \"Nguyễn Văn A\" \"Bận việc\"</i>\n"
+            "🔹 /swap - Hoán đổi 2 ca trực\n"
+            "   <i>VD: /swap 01/02 sáng 02/02 chiều</i>\n"
+            "🔹 /register - Đăng ký nhận thông báo\n"
+            "   <i>VD: /register Nguyễn Văn A</i>\n"
+            "🔹 /help - Xem hướng dẫn chi tiết",
+            parse_mode='HTML'
         )
         user = update.effective_user
         logger.info(f"User {user.full_name} ({user.id}) started the bot")
 
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await update.message.reply_text(
-            "Hướng dẫn sử dụng:\n"
-            "- Xem lịch: /today hoặc /tomorrow\n"
-            "- Tra cứu: /check dd/mm/yyyy\n"
-            "- Đổi lịch: /change dd/mm/yyyy [sáng/chiều] \"Tên người mới\" \"Lý do\"\n"
-            "- Đổi ca trực cho nhau: /swap ngày1 ca1 ngày2 ca2\n"
-            "- Đăng ký nhận thông báo: /register [Họ tên]\n"
-            "- Tìm lịch cá nhân: /search [Họ tên]\n"
-            "- Gửi thông báo (Admin): /send_noti dd/mm/yyyy [ca]\n"
-            "- Bot sẽ tự động gửi thông báo trực ban vào 15:00 hàng ngày."
+        help_text = (
+            "📖 <b>HƯỚNG DẪN SỬ DỤNG CHI TIẾT</b>\n\n"
+            "1️⃣ <b>Xem lịch:</b>\n"
+            "• <code>/today</code>: Xem lịch trực hôm nay\n"
+            "• <code>/tomorrow</code>: Xem lịch trực ngày mai\n"
+            "• <code>/check [ngày]</code>: Tra cứu ngày bất kỳ\n"
+            "   <i>VD: /check 30/01/2026 (hoặc /check để xem hôm nay)</i>\n\n"
+            "2️⃣ <b>Tìm kiếm & Đăng ký:</b>\n"
+            "• <code>/search [tên]</code>: Tìm lịch của cán bộ\n"
+            "   <i>VD: /search An (hoặc /search để tự tìm tên mình)</i>\n"
+            "• <code>/register [họ tên]</code>: Đăng ký ID để nhận tin nhắn\n"
+            "   <i>VD: /register Nguyễn Văn A</i>\n\n"
+            "3️⃣ <b>Đổi lịch & Hoán đổi:</b>\n"
+            "• <code>/change [ngày] [ca] [tên mới] [lý do]</code>: Đổi 1 ca\n"
+            "   <i>VD: /change 01/05/2026 sáng \"Trần Văn B\" \"Lý do...\"</i>\n"
+            "• <code>/swap [ngày1] [ca1] [ngày2] [ca2]</code>: Đổi chéo 2 ca\n"
+            "   <i>VD: /swap 01/02 sáng 02/02 chiều</i>\n\n"
+            "4️⃣ <b>Quy định:</b>\n"
+            "• Bot tự động gửi thông báo nhắc lịch vào 15:00 hàng ngày.\n"
+            "• Lệnh <code>/swap</code> yêu cầu chính chủ hoặc Admin xác nhận."
         )
+        await update.message.reply_text(help_text, parse_mode='HTML')
 
     async def today_schedule(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         today = datetime.now()
@@ -70,7 +93,12 @@ class DutyBot:
         """Tra cứu lịch trực theo ngày"""
         try:
             if not context.args:
-                await update.message.reply_text("❌ Vui lòng nhập ngày. Ví dụ: /check 30/01/2026")
+                # Nếu không nhập ngày, mặc định lấy ngày hôm nay
+                date = datetime.now()
+                date_str = date.strftime('%d/%m/%Y')
+                info = self.schedule_mgr.get_duty_info_for_date(date)
+                msg = self._format_duty_message(info, f"HÔM NAY ({date_str})")
+                await update.message.reply_text(msg, parse_mode='HTML')
                 return
 
             date_str = context.args[0]
@@ -237,11 +265,16 @@ class DutyBot:
                         sent_count += 1
                         log_messages.append(f"✅ Đã gửi cho {name} ({shift})")
                         logger.info(f"Manually sent notification to {name} ({chat_id})")
+                        # Log to database
+                        self.db.log_notification(duty_info['date'], shift, name, "Success")
                     except Exception as e:
                         log_messages.append(f"❌ Lỗi gửi {name}: {e}")
                         logger.error(f"Failed to send to {name}: {e}")
+                        # Log to database
+                        self.db.log_notification(duty_info['date'], shift, name, "Failed", str(e))
                 else:
                     log_messages.append(f"⚠️ Không tìm thấy ID của {name}")
+                    self.db.log_notification(duty_info['date'], shift, name, "Failed", "Không tìm thấy ID")
 
             # Report back to admin
             summary = "\n".join(log_messages)
@@ -259,29 +292,42 @@ class DutyBot:
     async def find_schedule(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Tìm lịch trực theo tên: /tim_lich Tên_người [tháng/năm]"""
         try:
-            if not context.args:
-                await update.message.reply_text("❌ Vui lòng nhập tên người cần tìm. Ví dụ: /tim_lich An")
-                return
-
-            # Xử lý input: Tên_người [tháng/năm]
-            args = context.args
             search_date = datetime.now()
-            
-            # Thử kiểm tra xem đối số cuối cùng có phải là tháng/năm (m/yyyy hoặc mm/yyyy)
-            last_arg = args[-1]
-            if '/' in last_arg:
-                parts = last_arg.split('/')
-                if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
-                    try:
-                        month = int(parts[0])
-                        year = int(parts[1])
-                        if 1 <= month <= 12:
-                            search_date = datetime(year, month, 1)
-                            args = args[:-1] # Loại bỏ phần ngày tháng khỏi tên
-                    except ValueError:
-                        pass # Nếu không parse được thì coi như là một phần của tên
-            
-            name_query = " ".join(args).strip()
+            name_query = ""
+
+            if not context.args:
+                # Nếu không nhập tên, tự động tìm theo Telegram ID của người dùng
+                user_id = str(update.effective_user.id)
+                officer = self.db.get_officer_by_telegram_id(user_id)
+                
+                if officer:
+                    name_query = officer[1] # Cột 'name' trong bảng officers_contact
+                    await update.message.reply_text(f"🔍 Đang tìm lịch cho đồng chí <b>{name_query}</b>...", parse_mode='HTML')
+                else:
+                    await update.message.reply_text(
+                        "❌ Bạn chưa đăng ký họ tên. Vui lòng cung cấp tên hoặc dùng lệnh /register.\n"
+                        "Ví dụ: /search Nguyễn Văn A hoặc /register Nguyễn Văn A"
+                    )
+                    return
+            else:
+                # Xử lý input: Tên_người [tháng/năm]
+                args = list(context.args)
+                
+                # Thử kiểm tra xem đối số cuối cùng có phải là tháng/năm (m/yyyy hoặc mm/yyyy)
+                last_arg = args[-1]
+                if '/' in last_arg:
+                    parts = last_arg.split('/')
+                    if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                        try:
+                            month = int(parts[0])
+                            year = int(parts[1])
+                            if 1 <= month <= 12:
+                                search_date = datetime(year, month, 1)
+                                args = args[:-1] # Loại bỏ phần ngày tháng khỏi tên
+                        except ValueError:
+                            pass # Nếu không parse được thì coi như là một phần của tên
+                
+                name_query = " ".join(args).strip()
             
             if len(name_query) < 2:
                  await update.message.reply_text("⚠️ Vui lòng nhập họ tên đầy đủ (ít nhất 2 ký tự).")
@@ -444,8 +490,15 @@ class DutyBot:
                     await context.bot.send_message(chat_id=chat_id, text=personal_msg, parse_mode='HTML')
                     sent_count += 1
                     logger.info(f"Sent notification to {name} ({chat_id})")
+                    # Log to database
+                    self.db.log_notification(duty_info['date'], shift, name, "Success")
                 except Exception as e:
                      logger.error(f"Failed to send to {name}: {e}")
+                     # Log to database
+                     self.db.log_notification(duty_info['date'], shift, name, "Failed", str(e))
+            else:
+                    logger.warning(f"Không tìm thấy ID của {name}")
+                    self.db.log_notification(duty_info['date'], shift, name, "Failed", "Không tìm thấy ID")
         
         logger.info(f"Daily notification job finished. Sent {sent_count} messages.")
 
@@ -565,9 +618,9 @@ if __name__ == '__main__':
     try:
         notify_time_str = config.NOTIFICATION_TIME
         h, m = map(int, notify_time_str.split(':'))
-        notify_time = time(hour=h, minute=m)
+        notify_time = time(hour=h, minute=m, tzinfo=VN_TZ)
         job_queue.run_daily(bot_logic.daily_notification, time=notify_time)
-        print(f"✅ Đã lên lịch gửi thông báo hàng ngày vào lúc {notify_time_str}")
+        print(f"✅ Đã lên lịch gửi thông báo hàng ngày vào lúc {notify_time_str} (Múi giờ: {VN_TZ})")
     except Exception as e:
         print(f"❌ Lỗi cấu hình thời gian: {e}")
 
