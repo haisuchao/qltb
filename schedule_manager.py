@@ -534,11 +534,12 @@ class ScheduleManager:
             print(f"Lỗi đọc DS trực: {e}")
             return []
 
-    def auto_generate_round_robin(self, month_year, names=None, leaders=None):
+    def auto_generate_round_robin(self, month_year, names=None, leaders=None, start_name=None):
         """
         Tự động xếp lịch theo vòng tròn (Round-robin)
         - names: Nếu None, sẽ tự đọc từ sheet 'DS trực'
         - leaders: Danh sách lãnh đạo trực
+        - start_name: Tên người bắt đầu xếp lịch (nếu có, sẽ bỏ qua logic nối tiếp tháng trước)
         - Bỏ qua Thứ 7, Chủ Nhật
         - Luân phiên sáng/chiều cho mỗi người
         """
@@ -586,6 +587,7 @@ class ScheduleManager:
             # Logic xếp lịch
             idx_names = 0
             idx_leaders = 0
+            use_start_name = False  # Cờ đánh dấu có dùng start_name hay không
             
             # Nếu names không được cung cấp, lấy từ DS trực
             if not names:
@@ -596,50 +598,64 @@ class ScheduleManager:
             
             if not leaders:
                 return False, "Danh sách lãnh đạo trực không được để trống."
+            
+            # Nếu có start_name, tìm vị trí trong danh sách và đặt idx_names
+            if start_name:
+                # Tìm kiếm tên (hỗ trợ tìm một phần tên, không phân biệt hoa thường)
+                start_name_lower = start_name.lower().strip()
+                found_idx = None
+                for i, name in enumerate(names):
+                    if start_name_lower in name.lower() or name.lower() in start_name_lower:
+                        found_idx = i
+                        break
+                
+                if found_idx is not None:
+                    # Tính idx_names sao cho người đầu tiên trực sáng ngày đầu = start_name
+                    # Với công thức m_idx = (idx + offset) % N, ta cần m_idx == found_idx khi idx_names == 0
+                    # Đơn giản: idx_names = found_idx * (cần tính ngược từ công thức)
+                    # Công thức sáng: m_idx = (idx_names + (idx_names // n_names if n_names % 2 == 0 else 0)) % n_names
+                    # Khi idx_names nhỏ (< n_names), offset bổ sung = 0, nên m_idx = idx_names % n_names
+                    # Vậy idx_names = found_idx
+                    idx_names = found_idx
+                    use_start_name = True
+                    print(f"Bắt đầu xếp lịch từ: {names[found_idx]} (vị trí {found_idx})")
+                else:
+                    return False, f"Không tìm thấy '{start_name}' trong danh sách cán bộ."
 
             n_names = len(names)
             n_leaders = len(leaders)
 
-            # --- LOGIC NỐI TIẾP THÁNG TRƯỚC ---
-            prev_m = m - 1 if m > 1 else 12
-            prev_y = y if m > 1 else y - 1
-            prev_sheet_name = f"{prev_m}-{prev_y}"
-            
-            if prev_sheet_name in wb.sheetnames:
-                ws_prev = wb[prev_sheet_name]
-                last_afternoon = None
+            # --- LOGIC NỐI TIẾP THÁNG TRƯỚC (bỏ qua nếu đã chỉ định start_name) ---
+            if not use_start_name:
+                prev_m = m - 1 if m > 1 else 12
+                prev_y = y if m > 1 else y - 1
+                prev_sheet_name = f"{prev_m}-{prev_y}"
                 
-                # Quét từ dưới lên để tìm người trực cuối cùng (Dòng 5 trở đi)
-                # max_row có thể chứa hàng trống, nên ta tìm hàng cuối có dữ liệu
-                for r in range(ws_prev.max_row, 4, -1):
-                    val_a = ws_prev.cell(row=r, column=4).value # Afternoon
-                    if val_a and not last_afternoon:
-                        last_afternoon = str(val_a).strip()
-                        break
-                
-                # Tìm vị trí của người cuối cùng trong danh sách hiện tại
-                if last_afternoon in names:
-                    # Giả sử logic là idx_names tăng 2 mỗi ngày làm việc.
-                    # Nếu last_afternoon là người thứ k, thì idx_names của ngày tiếp theo
-                    # nên bắt đầu để người thứ k+1 trực Sáng.
-                    # Ta cần 'mò' idx_names sao cho a_idx của ngày trước đó khớp với last_afternoon.
-                    # Một cách đơn giản: Thử các idx_names cho đến khi khớp hoặc dùng toán học.
-                    # Với công thức m_idx = (idx + offset) % N và a_idx = (idx + 1 + offset) % N
-                    # Ta tìm idx sao cho a_idx == last_afternoon_idx.
-                    try:
-                        last_idx = names.index(last_afternoon)
-                        # Chúng ta muốn idx_names khởi đầu sao cho m_idx của ngày đầu tiên là (last_idx + 1) % N
-                        # Với công thức hiện tại, ta tính toán ngược hoặc đơn giản là dùng một biến đếm slot.
-                        # Tuy nhiên, để chính xác nhất với công thức alternating, ta "chạy giả lập" để tìm idx_names.
-                        found_idx = 0
-                        for test_idx in range(n_names * 2): # Quét đủ 1 vòng
-                             # Tính a_idx của test_idx
-                             off = (test_idx + 1) // n_names if n_names % 2 == 0 else 0
-                             if (test_idx + 1 + off) % n_names == last_idx:
-                                 found_idx = test_idx + 2
-                                 break
-                        idx_names = found_idx
-                    except: pass
+                if prev_sheet_name in wb.sheetnames:
+                    ws_prev = wb[prev_sheet_name]
+                    last_afternoon = None
+                    
+                    # Quét từ dưới lên để tìm người trực cuối cùng (Dòng 5 trở đi)
+                    # max_row có thể chứa hàng trống, nên ta tìm hàng cuối có dữ liệu
+                    for r in range(ws_prev.max_row, 4, -1):
+                        val_a = ws_prev.cell(row=r, column=4).value # Afternoon
+                        if val_a and not last_afternoon:
+                            last_afternoon = str(val_a).strip()
+                            break
+                    
+                    # Tìm vị trí của người cuối cùng trong danh sách hiện tại
+                    if last_afternoon in names:
+                        try:
+                            last_idx = names.index(last_afternoon)
+                            found_idx = 0
+                            for test_idx in range(n_names * 2): # Quét đủ 1 vòng
+                                 # Tính a_idx của test_idx
+                                 off = (test_idx + 1) // n_names if n_names % 2 == 0 else 0
+                                 if (test_idx + 1 + off) % n_names == last_idx:
+                                     found_idx = test_idx + 2
+                                     break
+                            idx_names = found_idx
+                        except: pass
                 
             # -----------------------------------
             

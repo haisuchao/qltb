@@ -529,6 +529,77 @@ class DutyBot:
         else:
             await update.message.reply_text(f"❌ Lỗi khi tạo thống kê: {message}")
 
+    # --- Monthly Auto-Schedule Job ---
+    async def monthly_auto_schedule_job(self, context: ContextTypes.DEFAULT_TYPE):
+        """Job chạy hàng ngày, kiểm tra nếu đúng ngày cấu hình thì tự động xếp lịch tháng tiếp theo"""
+        today = datetime.now(VN_TZ)
+        target_day = getattr(config, 'AUTO_SCHEDULE_DAY', 25)
+        
+        # Chỉ chạy vào đúng ngày đã cấu hình
+        if today.day != target_day:
+            return
+        
+        logger.info(f"🗓️ Bắt đầu xếp lịch tự động cho tháng tiếp theo (ngày {target_day} hàng tháng)...")
+        
+        # Tính tháng tiếp theo
+        if today.month == 12:
+            next_month = 1
+            next_year = today.year + 1
+        else:
+            next_month = today.month + 1
+            next_year = today.year
+        
+        month_year = f"{next_month}-{next_year}"
+        
+        # Lấy danh sách lãnh đạo từ config
+        leaders = getattr(config, 'AUTO_SCHEDULE_LEADERS', None)
+        if not leaders:
+            error_msg = "❌ Chưa cấu hình AUTO_SCHEDULE_LEADERS trong config.py. Không thể xếp lịch tự động."
+            logger.error(error_msg)
+            for admin_id in config.ADMIN_IDS:
+                try:
+                    await context.bot.send_message(chat_id=admin_id, text=error_msg)
+                except Exception as e:
+                    logger.error(f"Lỗi gửi thông báo lỗi cho Admin {admin_id}: {e}")
+            return
+        
+        # Gọi hàm xếp lịch (names=None để tự lấy từ sheet 'DS trực')
+        success, message = self.schedule_mgr.auto_generate_round_robin(month_year, names=None, leaders=leaders)
+        
+        # Gửi kết quả cho tất cả Admin
+        for admin_id in config.ADMIN_IDS:
+            try:
+                if success:
+                    filepath = self.schedule_mgr.get_master_schedule_path()
+                    with open(filepath, 'rb') as doc:
+                        await context.bot.send_document(
+                            chat_id=admin_id,
+                            document=doc,
+                            filename=f"Lich_Truc_{month_year}.xlsx",
+                            caption=(
+                                f"📅 <b>XẾP LỊCH TỰ ĐỘNG THÀNH CÔNG</b>\n\n"
+                                f"✅ {message}\n"
+                                f"Tháng: <b>{month_year}</b>\n"
+                                f"Lãnh đạo: {', '.join(leaders)}\n\n"
+                                f"Hãy kiểm tra sheet '<b>{month_year}</b>' trong file đính kèm."
+                            ),
+                            parse_mode='HTML'
+                        )
+                    logger.info(f"Đã gửi lịch tự động tháng {month_year} cho Admin {admin_id}")
+                else:
+                    await context.bot.send_message(
+                        chat_id=admin_id,
+                        text=(
+                            f"❌ <b>XẾP LỊCH TỰ ĐỘNG THẤT BẠI</b>\n\n"
+                            f"Tháng: {month_year}\n"
+                            f"Lỗi: {message}"
+                        ),
+                        parse_mode='HTML'
+                    )
+                    logger.error(f"Xếp lịch tự động tháng {month_year} thất bại: {message}")
+            except Exception as e:
+                logger.error(f"Lỗi gửi kết quả auto-schedule cho Admin {admin_id}: {e}")
+
     async def auto_schedule_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """Xếp lịch tự động: /auto_schedule [m-yyyy] [danh_sách_cán_bộ] | [danh_sách_lãnh_đạo]"""
         user_id = str(update.effective_user.id)
@@ -540,7 +611,9 @@ class DutyBot:
             await update.message.reply_text(
                 "⚠️ Cách dùng 1 (Lấy tên từ DS trực): /auto_schedule [m-yyyy] | [Lãnh đạo]\n"
                 "Ví dụ: /auto_schedule 3-2026 | Lãnh Đạo A, Lãnh Đạo B\n\n"
-                "⚠️ Cách dùng 2 (Nhập tên thủ công): /auto_schedule [m-yyyy] [Tên_A, Tên_B] | [Lãnh đạo]\n"
+                "⚠️ Cách dùng 2 (Chỉ định người bắt đầu): /auto_schedule [m-yyyy] [Tên] | [Lãnh đạo]\n"
+                "Ví dụ: /auto_schedule 3-2026 Hải | Lãnh Đạo A\n\n"
+                "⚠️ Cách dùng 3 (Nhập DS thủ công): /auto_schedule [m-yyyy] [Tên_A, Tên_B] | [Lãnh đạo]\n"
                 "Ví dụ: /auto_schedule 3-2026 Hải, Việt | Lãnh Đạo A"
             )
             return
@@ -557,8 +630,22 @@ class DutyBot:
                 names_str = parts[0].strip()
                 leaders_str = parts[1].strip()
                 
-                names = [n.strip() for n in names_str.split(',') if n.strip()] if names_str else None
                 leaders = [n.strip() for n in leaders_str.split(',') if n.strip()]
+                
+                # Phân biệt 3 trường hợp:
+                # 1. Không nhập tên (trước dấu | trống) → names=None, start_name=None
+                # 2. Nhập 1 tên (không có dấu phẩy) → đó là người bắt đầu, start_name=tên đó
+                # 3. Nhập nhiều tên (có dấu phẩy) → đó là danh sách đầy đủ, names=list
+                names = None
+                start_name = None
+                
+                if names_str:
+                    if ',' in names_str:
+                        # Nhiều tên → danh sách đầy đủ
+                        names = [n.strip() for n in names_str.split(',') if n.strip()]
+                    else:
+                        # 1 tên duy nhất → người bắt đầu
+                        start_name = names_str
             else:
                 # Nếu không có dấu |, coi như chỉ nhập tháng (lỗi hoặc thiếu)
                 await update.message.reply_text("❌ Vui lòng cung cấp danh sách lãnh đạo sau dấu gạch đứng '|'.")
@@ -568,9 +655,12 @@ class DutyBot:
                 await update.message.reply_text("❌ Thiếu danh sách lãnh đạo.")
                 return
 
-            await update.message.reply_text(f"⏳ Đang tự động xếp lịch vòng tròn cho tháng {month_year}...")
+            if start_name:
+                await update.message.reply_text(f"⏳ Đang xếp lịch vòng tròn cho tháng {month_year}, bắt đầu từ <b>{start_name}</b>...", parse_mode='HTML')
+            else:
+                await update.message.reply_text(f"⏳ Đang tự động xếp lịch vòng tròn cho tháng {month_year}...")
             
-            success, message = self.schedule_mgr.auto_generate_round_robin(month_year, names, leaders)
+            success, message = self.schedule_mgr.auto_generate_round_robin(month_year, names, leaders, start_name=start_name)
             
             if success:
                  # Gửi file Excel cho Admin kiểm tra
@@ -623,6 +713,17 @@ if __name__ == '__main__':
         print(f"✅ Đã lên lịch gửi thông báo hàng ngày vào lúc {notify_time_str} (Múi giờ: {VN_TZ})")
     except Exception as e:
         print(f"❌ Lỗi cấu hình thời gian: {e}")
+
+    # Monthly auto-schedule job (chạy daily, kiểm tra ngày bên trong)
+    try:
+        auto_time_str = getattr(config, 'AUTO_SCHEDULE_TIME', '08:00')
+        ah, am = map(int, auto_time_str.split(':'))
+        auto_time = time(hour=ah, minute=am, tzinfo=VN_TZ)
+        job_queue.run_daily(bot_logic.monthly_auto_schedule_job, time=auto_time)
+        auto_day = getattr(config, 'AUTO_SCHEDULE_DAY', 25)
+        print(f"✅ Đã lên lịch xếp lịch tự động vào ngày {auto_day} hàng tháng lúc {auto_time_str}")
+    except Exception as e:
+        print(f"❌ Lỗi cấu hình auto schedule: {e}")
 
     print("🤖 Bot đang chạy...")
     app.run_polling()
