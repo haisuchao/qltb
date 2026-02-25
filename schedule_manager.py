@@ -73,6 +73,11 @@ class ScheduleManager:
             df.columns.values[3] = 'Afternoon'
             df.columns.values[4] = 'Leader'
             
+            # Xử lý ô gộp (Merged cells) cho cột Ngày: Điền giá trị từ trên xuống
+            df['Date'] = df['Date'].ffill()
+            
+            print(f"📊 Đã đọc {len(df)} dòng dữ liệu từ sheet {sheet_name}")
+            
             return df
         except Exception as e:
             print(f"Lỗi khi đọc file {filepath} (Sheet {sheet_name}): {str(e)}")
@@ -376,8 +381,11 @@ class ScheduleManager:
 
     # def export_statistics_to_excel(self, start_date, end_date, output_file):
 
-    def search_duty_schedule(self, name_query, date=None):
-        """Tìm lịch trực của một người trong tháng (theo ngày cung cấp hoặc tháng hiện tại)"""
+    def search_duty_schedule(self, name_query=None, date=None):
+        """Tìm lịch trực trong tháng (theo ngày cung cấp hoặc tháng hiện tại).
+        - name_query=None hoặc rỗng: Trả về toàn bộ lịch của tháng.
+        - name_query có giá trị: Lọc theo tên.
+        """
         if date is None:
             date = datetime.now()
             
@@ -386,36 +394,78 @@ class ScheduleManager:
             return []
             
         results = []
-        name_query = name_query.lower()
+        search_by_name = name_query and name_query.strip()
+        if search_by_name:
+            name_query = name_query.lower().strip()
         
-        # Duyệt qua từng dòng
         # Chuẩn hóa cột Date
         df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
         
         for index, row in df.iterrows():
-            # Check Morning
-            morning = str(row.get('Morning', '')).lower()
-            # Check Afternoon
-            afternoon = str(row.get('Afternoon', '')).lower()
-            # Check Leader
-            leader = str(row.get('Leader', '')).lower()
+            duty_date = row['Date']
             
-            matched_role = []
-            if name_query in morning:
-                matched_role.append('Sáng')
-            if name_query in afternoon:
-                matched_role.append('Chiều')
-            if name_query in leader:
-                matched_role.append('Lãnh đạo')
-                
-            if matched_role:
-                duty_date = row['Date']
-                if pd.notna(duty_date):
-                    results.append({
+            # Debug: In giá trị ngày đọc được
+            # print(f"DEBUG: Index {index}, Date: {duty_date}, Type: {type(duty_date)}")
+            
+            # Chuyển đổi sang datetime nếu chưa phải
+            if not isinstance(duty_date, datetime) and pd.notna(duty_date):
+                try:
+                    # Thử parse chuỗi ngày (ưu tiên ngày trước tháng)
+                    duty_date = pd.to_datetime(duty_date, dayfirst=True, errors='coerce')
+                except:
+                    pass
+
+            # Nếu ko parse được ngày (NaT), bỏ qua dòng đó
+            if pd.isna(duty_date):
+                continue
+
+            # Check Morning
+            morning_raw = str(row.get('Morning', ''))
+            morning = morning_raw.lower().strip()
+            # Check Afternoon
+            afternoon_raw = str(row.get('Afternoon', ''))
+            afternoon = afternoon_raw.lower().strip()
+            # Check Leader
+            leader_raw = str(row.get('Leader', ''))
+            leader = leader_raw.lower().strip()
+            
+            if search_by_name:
+                # Lọc theo tên
+                matched_role = []
+                if name_query in morning:
+                    matched_role.append('Sáng')
+                if name_query in afternoon:
+                    matched_role.append('Chiều')
+                if name_query in leader:
+                    matched_role.append('Lãnh đạo')
+                    
+                if matched_role:
+                    res_item = {
                         'date': duty_date.strftime('%d/%m/%Y'),
                         'day_of_week': row.iloc[1] if pd.notna(row.iloc[1]) else '',
                         'roles': matched_role
-                    })
+                    }
+                    print(f"✨ Tìm thấy: {res_item}")
+                    results.append(res_item)
+            else:
+                # Khi xem toàn bộ lịch tháng:
+                # Bỏ qua dòng nếu hoàn toàn không có ai trực
+                blacklist = ['nan', '', 'x', '-']
+                has_data = (
+                    morning not in blacklist or
+                    afternoon not in blacklist or
+                    leader not in blacklist
+                )
+                if has_data:
+                    res_item = {
+                        'date': duty_date.strftime('%d/%m/%Y'),
+                        'day_of_week': row.iloc[1] if pd.notna(row.iloc[1]) else '',
+                        'morning': morning_raw.strip() if morning not in blacklist else '',
+                        'afternoon': afternoon_raw.strip() if afternoon not in blacklist else '',
+                        'leader': leader_raw.strip() if leader not in blacklist else '',
+                    }
+                    print(f"📅 Dòng dữ liệu: {res_item['date']} | S: {res_item['morning']} | C: {res_item['afternoon']} | LD: {res_item['leader']}")
+                    results.append(res_item)
                     
         return results
 
@@ -572,7 +622,7 @@ class ScheduleManager:
                 ws = wb.create_sheet(sheet_name)
             
             # Thiết lập header (Template)
-            headers = ["Ngày", "Thứ", "Trực sáng", "Trực chiều", "Lãnh đạo trực"]
+            headers = ["Ngày", "Thứ", "Trực ban 1", "Trực ban 2", "Lãnh đạo trực"]
             for col, header in enumerate(headers, 1):
                 cell = ws.cell(row=4, column=col, value=header)
                 cell.font = Font(bold=True)
@@ -670,8 +720,10 @@ class ScheduleManager:
                 if weekday == 0:
                     idx_leaders = 0
                 
-                # Cột A: Ngày
-                ws.cell(row=row_idx, column=1, value=date_obj.strftime('%d/%m/%Y'))
+                # Cột A: Ngày (Ghi đối tượng datetime trực tiếp và set format)
+                date_cell = ws.cell(row=row_idx, column=1, value=date_obj)
+                date_cell.number_format = 'dd/mm/yyyy'
+                
                 # Cột B: Thứ
                 ws.cell(row=row_idx, column=2, value=day_names[weekday])
                 

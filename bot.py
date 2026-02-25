@@ -41,7 +41,7 @@ class DutyBot:
             "🔹 /check - Tra cứu lịch theo ngày\n"
             "   <i>VD: /check 30/01/2026</i>\n"
             "🔹 /search - Tìm lịch cá nhân\n"
-            "   <i>VD: /search Nguyễn Văn A</i>\n"
+            "   <i>VD: /search An | /search 3/2026 (Tìm lịch của mình)</i>\n"
             "🔹 /change - Đổi người trực (1 ca)\n"
             "   <i>VD: /change 01/05/2026 sáng \"Nguyễn Văn A\" \"Bận việc\"</i>\n"
             "🔹 /swap - Hoán đổi 2 ca trực\n"
@@ -63,8 +63,10 @@ class DutyBot:
             "• <code>/check [ngày]</code>: Tra cứu ngày bất kỳ\n"
             "   <i>VD: /check 30/01/2026 (hoặc /check để xem hôm nay)</i>\n\n"
             "2️⃣ <b>Tìm kiếm & Đăng ký:</b>\n"
-            "• <code>/search [tên]</code>: Tìm lịch của cán bộ\n"
-            "   <i>VD: /search An (hoặc /search để tự tìm tên mình)</i>\n"
+            "• <code>/search [tên]</code>: Tìm lịch cán bộ trong tháng hiện tại\n"
+            "• <code>/search [m/yyyy]</code>: Tìm lịch của <b>bản thân</b> trong tháng chỉ định\n"
+            "• <code>/search [tên] [m/yyyy]</code>: Tìm lịch cán bộ trong tháng chỉ định\n"
+            "   <i>VD: /search An | /search 3/2026 | /search An 3/2026</i>\n"
             "• <code>/register [họ tên]</code>: Đăng ký ID để nhận tin nhắn\n"
             "   <i>VD: /register Nguyễn Văn A</i>\n\n"
             "3️⃣ <b>Đổi lịch & Hoán đổi:</b>\n"
@@ -290,13 +292,18 @@ class DutyBot:
             await update.message.reply_text("❌ Có lỗi xảy ra khi gửi thông báo.")
 
     async def find_schedule(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Tìm lịch trực theo tên: /tim_lich Tên_người [tháng/năm]"""
+        """Tìm lịch trực theo tên và/hoặc tháng.
+        Cú pháp:
+          /search [tên]            → Tìm theo tên trong tháng hiện tại
+          /search [m/yyyy]         → Xem toàn bộ lịch của tháng chỉ định
+          /search [tên] [m/yyyy]   → Tìm theo tên trong tháng chỉ định
+        """
         try:
             search_date = datetime.now()
             name_query = ""
 
             if not context.args:
-                # Nếu không nhập tên, tự động tìm theo Telegram ID của người dùng
+                # Nếu không nhập gì, tự động tìm theo Telegram ID của người dùng
                 user_id = str(update.effective_user.id)
                 officer = self.db.get_officer_by_telegram_id(user_id)
                 
@@ -306,31 +313,54 @@ class DutyBot:
                 else:
                     await update.message.reply_text(
                         "❌ Bạn chưa đăng ký họ tên. Vui lòng cung cấp tên hoặc dùng lệnh /register.\n"
-                        "Ví dụ: /search Nguyễn Văn A hoặc /register Nguyễn Văn A"
+                        "Ví dụ: /search Nguyễn Văn A hoặc /register Nguyễn Văn A\n"
+                        "Hoặc xem lịch theo tháng: /search 3/2026"
                     )
                     return
             else:
-                # Xử lý input: Tên_người [tháng/năm]
                 args = list(context.args)
                 
-                # Thử kiểm tra xem đối số cuối cùng có phải là tháng/năm (m/yyyy hoặc mm/yyyy)
+                # Thử parse đối số cuối cùng xem có phải tháng/năm không (m/yyyy hoặc mm/yyyy)
                 last_arg = args[-1]
+                month_parsed = False
                 if '/' in last_arg:
                     parts = last_arg.split('/')
-                    if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+                    if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit() and len(parts[1]) == 4:
                         try:
                             month = int(parts[0])
                             year = int(parts[1])
                             if 1 <= month <= 12:
                                 search_date = datetime(year, month, 1)
-                                args = args[:-1] # Loại bỏ phần ngày tháng khỏi tên
+                                args = args[:-1]  # Bỏ phần tháng/năm ra khỏi danh sách tên
+                                month_parsed = True
                         except ValueError:
-                            pass # Nếu không parse được thì coi như là một phần của tên
-                
+                            pass  # Không phải tháng/năm, coi như phần tên
+
                 name_query = " ".join(args).strip()
-            
+
+                # --- Trường hợp: CHỈ nhập tháng (không có tên) ---
+                if month_parsed and not name_query:
+                    # Lấy tên người dùng hiện tại từ Database
+                    user_id = str(update.effective_user.id)
+                    officer = self.db.get_officer_by_telegram_id(user_id)
+                    
+                    if officer:
+                        name_query = officer[1]
+                        await update.message.reply_text(f"🔍 Đang tìm lịch trực của đồng chí <b>{name_query}</b> trong tháng {search_date.month}/{search_date.year}...", parse_mode='HTML')
+                    else:
+                        await update.message.reply_text(
+                            f"❌ Bạn chưa đăng ký họ tên nên không thể tự tìm lịch trong tháng {search_date.month}/{search_date.year}.\n"
+                            "Vui lòng dùng lệnh /register [Họ tên] trước, hoặc nhập tên kèm theo tháng.\n"
+                            "Ví dụ: /search Nguyễn Văn A 3/2026"
+                        )
+                        return
+
+            # --- Tìm theo tên (có hoặc không có tháng) ---
             if len(name_query) < 2:
-                 await update.message.reply_text("⚠️ Vui lòng nhập họ tên đầy đủ (ít nhất 2 ký tự).")
+                 await update.message.reply_text(
+                     "⚠️ Vui lòng nhập họ tên đầy đủ (ít nhất 2 ký tự) hoặc nhập tháng theo định dạng m/yyyy.\n"
+                     "Ví dụ: /search An | /search 3/2026 | /search An 3/2026"
+                 )
                  return
 
             results = self.schedule_mgr.search_duty_schedule(name_query, search_date)
@@ -341,7 +371,7 @@ class DutyBot:
                 )
                 return
             
-            # Format output
+            # Format output cho tìm kiếm theo tên
             msg = f"🔎 <b>KẾT QUẢ TÌM KIẾM: {name_query} (Tháng {search_date.month}/{search_date.year})</b>\n\n"
             for item in results:
                 roles_str = ", ".join(item['roles'])
