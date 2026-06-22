@@ -18,10 +18,6 @@ class ScheduleManager:
         # Format sheet name: m-yyyy (ví dụ: 8-2025)
         return f"{date.month}-{date.year}"
     
-    
-    # Removed sync_from_drive logic for faster response
-    
-
     def get_master_schedule_path(self):
         """Lấy đường dẫn file lịch trực tổng hợp"""
         # Ưu tiên file master được cấu hình

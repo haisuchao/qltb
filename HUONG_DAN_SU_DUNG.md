@@ -36,8 +36,7 @@ Hệ thống yêu cầu file Excel phải đúng định dạng để có thể 
      - Cột D: Trực chiều (Tên cán bộ)
      - Cột E: Lãnh đạo trực (Tên cán bộ)
 
-2. **Cách tạo nhanh**:
-   - Bạn có thể tạo file mới và copy cấu trúc như hình dưới đây:
+2. **Ví dụ cấu trúc**:
    
    | Ngày | Thứ | Trực sáng | Trực chiều | Lãnh đạo |
    | :--- | :--- | :--- | :--- | :--- |
@@ -50,29 +49,13 @@ Hệ thống yêu cầu file Excel phải đúng định dạng để có thể 
    > [!IMPORTANT]
    > Dữ liệu cán bộ phải bắt đầu từ **Dòng 5** trở đi (Dòng 4 là tiêu đề cột).
 
-4. **Vị trí file**:
+3. **Vị trí file**:
    - Chép file Excel vào thư mục `lich-truc-ban` ngay trong thư mục dự án.
-
-### Bước 4: Cấu hình Facebook Messenger Bot (Tùy chọn)
-Nếu bạn muốn sử dụng Bot trên Facebook Messenger thay vì hoặc song song với Telegram:
-
-1. **Tạo Fanpage**: Tạo một trang Facebook mới để làm đại diện cho Bot.
-2. **Cài đặt Facebook App**:
-   - Truy cập [Facebook Developers](https://developers.facebook.com/), tạo App mới loại **"Other"** -> chọn **"Messenger"**.
-   - Trong phần cài đặt Messenger, nhấn **"Add or Remove Pages"** để kết nối Fanpage của bạn.
-   - Nhấn **"Generate Token"** để lấy mã truy cập trang và dán vào `FACEBOOK_PAGE_ACCESS_TOKEN` trong file `config.py`.
-3. **Cấu hình Webhook**:
-   - Để nhận tin nhắn, bạn cần một địa chỉ HTTPS công khai. Nếu chạy tại máy cá nhân, hãy dùng **Ngrok** (`ngrok http 5000`).
-   - Copy link HTTPS của Ngrok (VD: `https://abcd-123.ngrok-free.app/webhook`) và dán vào phần Webhook của Facebook App.
-   - **Verify Token**: Nhập chuỗi trùng với `FACEBOOK_VERIFY_TOKEN` trong `config.py` (mặc định là `my_secret_token_123`).
-   - Chọn các trường đăng ký (Subscription Fields): `messages`, `messaging_postbacks`.
-4. **Chạy Bot**: Chạy file `facebook_bot.py` để bắt đầu lắng nghe tin nhắn.
 
 ---
 
 ## 📋 2. CÁC LỆNH ĐIỀU KHIỂN BOT
 
-### 🔹 Trên Telegram (Gõ lệnh có dấu `/`)
 | Lệnh | Mô tả | Ví dụ |
 | :--- | :--- | :--- |
 | `/start` | Khởi động Bot và xem menu lệnh | `/start` |
@@ -80,19 +63,15 @@ Nếu bạn muốn sử dụng Bot trên Facebook Messenger thay vì hoặc song
 | `/tomorrow` | Xem lịch trực ngày mai | `/tomorrow` |
 | `/check` | Tra cứu lịch của một ngày bất kỳ | `/check 30/01/2026` |
 | `/search` | Tìm lịch trực của một người | `/search Nguyễn Văn A` |
+| `/search [m/yyyy]` | Tìm lịch của bản thân trong tháng chỉ định | `/search 3/2026` |
+| `/search [tên] [m/yyyy]` | Tìm lịch cán bộ trong tháng chỉ định | `/search An 3/2026` |
 | `/register` | Đăng ký tài khoản nhận thông báo | `/register Nguyễn Văn A` |
-| `/change` | Thay đổi người trực cho một ca | `/change 30/01/2026 sáng "Lê Văn B"` |
-| `/swap` | Hoán đổi ca trực giữa 2 người | `/swap 01/02 sáng 02/02 chiều` |
-
-### 🔹 Trên Facebook Messenger (Gõ từ khóa trực tiếp)
-| Từ khóa | Mô tả |
-| :--- | :--- |
-| `today` | Xem lịch trực hôm nay |
-| `tomorrow` | Xem lịch trực ngày mai |
-| `search [tên]` | Tìm lịch trực của ai đó (VD: `search Hải`) |
-| `register [Họ tên]` | Đăng ký nhận thông báo (VD: `register Nguyễn Đỗ Hải`) |
-| `auto_schedule` | (Admin) Xếp lịch tự động vòng tròn |
-| `help` | Xem hướng dẫn sử dụng |
+| `/change` | Thay đổi người trực cho một ca | `/change 30/01/2026 sáng "Lê Văn B" "Lý do"` |
+| `/swap` | Hoán đổi ca trực giữa 2 người | `/swap 01/02/2026 sáng 02/02/2026 chiều` |
+| `/stats` | (Admin) Thống kê tổng hợp số buổi trực | `/stats` |
+| `/send_noti` | (Admin) Gửi thông báo thủ công | `/send_noti 30/01/2026` |
+| `/auto_schedule` | (Admin) Xếp lịch tự động vòng tròn | `/auto_schedule 3-2026 \| Lãnh Đạo A, Lãnh Đạo B` |
+| `/help` | Xem hướng dẫn chi tiết | `/help` |
 
 ---
 
@@ -105,12 +84,15 @@ Hệ thống hỗ trợ tính năng tự động xếp lịch theo vòng tròn (
 * Tự động bỏ qua Thứ 7 và Chủ nhật.
 * Thêm Sheet mới vào file Excel đúng định dạng Template.
 
-**Cách dùng (Trên Telegram):**
+**Cách dùng:**
 ```bash
 # Cách 1: Tên tự lấy từ sheet 'DS trực'
 /auto_schedule 3-2026 | Lãnh Đạo 1, Lãnh Đạo 2
 
-# Cách 2: Nhập danh sách tên thủ công
+# Cách 2: Chỉ định người bắt đầu
+/auto_schedule 3-2026 Hải | Lãnh Đạo 1, Lãnh Đạo 2
+
+# Cách 3: Nhập danh sách tên thủ công
 /auto_schedule 3-2026 Nguyễn Văn A, Lê Văn B | Lãnh Đạo 1, Lãnh Đạo 2
 ```
 *Lưu ý: Dùng dấu gạch đứng `|` để phân tách danh sách cán bộ và danh sách lãnh đạo. Nếu để trống phần trước dấu `|`, Bot sẽ tự động lấy danh sách từ sheet **'DS trực'** (trừ những người bị đánh dấu 'x' miễn trực).*
@@ -118,27 +100,27 @@ Hệ thống hỗ trợ tính năng tự động xếp lịch theo vòng tròn (
 ---
 
 ## 🔔 4. THÔNG BÁO TỰ ĐỘNG
-* **Thời gian**: Hệ thống tự động kiểm tra và nhắc lịch vào lúc **15:00** hàng ngày cho ngày hôm sau.
-* **Đăng ký**: Cần chạy lệnh `register` (Facebook) hoặc `/register` (Telegram) một lần duy nhất.
-* **Facebook ID**: Khi đăng ký trên Facebook, hệ thống sẽ lưu ID của bạn với tiền tố `FB_` trong cơ sở dữ liệu.
+* **Thời gian**: Hệ thống tự động kiểm tra và nhắc lịch vào lúc **16:15** hàng ngày cho ngày hôm sau.
+* **Đăng ký**: Cần chạy lệnh `/register` một lần duy nhất để hệ thống ghi nhận Telegram ID của bạn.
+* **Xếp lịch tự động hàng tháng**: Hệ thống tự động xếp lịch cho tháng tiếp theo vào ngày 23 hàng tháng (cấu hình trong `config.py`).
 
 ---
 
 ## 🚀 5. VẬN HÀNH BOT
 
-- **Chạy Telegram Bot**: `python bot.py`
-- **Chạy Facebook Bot**: `python facebook_bot.py`
-- **Chạy đồng thời**: Bạn có thể mở 2 cửa sổ Terminal để chạy cả 2 bot cùng lúc.
+```bash
+python bot.py
+```
 
 ---
 
 ## ❓ 6. CÂU HỎI THƯỜNG GẶP (FAQ)
-* **Q: Có cần cấu hình gì trên Facebook không?**
-  - A: Có, bạn cần cấu hình Webhook và Token trên Facebook Developer Portal như hướng dẫn ở Bước 4.
-* **Q: Dùng chung 1 file Excel và Database không?**
-  - A: Có. Cả hai nền tảng đều truy xuất chung dữ liệu từ file Excel trong thư mục `lich-truc-ban` và database `truc_ban.db`.
-* **Q: Làm sao để lấy FB PSID của tôi?**
-  - A: Bạn chỉ cần gõ lệnh `register [Tên]` trên Messenger, Bot sẽ trả về PSID của bạn sau khi đăng ký thành công.
+* **Q: Dữ liệu lịch trực lưu ở đâu?**
+  - A: Dữ liệu lịch trực được lưu trong file Excel tại thư mục `lich-truc-ban/`. Các log thông báo và lịch sử đổi ca được lưu trong database `truc_ban.db`.
+* **Q: Làm sao để thêm cán bộ mới?**
+  - A: Thêm tên cán bộ vào sheet `DS trực` trong file Excel. Cán bộ cũng cần chạy lệnh `/register` trên Telegram để nhận thông báo.
+* **Q: Ai có quyền Admin?**
+  - A: Cấu hình danh sách Admin ID trong file `config.py` tại biến `ADMIN_IDS`.
 
 ---
 *Chúc bạn quản lý trực ban hiệu quả!*

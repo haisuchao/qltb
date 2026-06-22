@@ -48,11 +48,30 @@ class DatabaseManager:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT UNIQUE NOT NULL,
                 telegram_id TEXT,
-                facebook_id TEXT,
                 phone TEXT,
                 email TEXT
             )
         ''')
+
+        # Migration: xóa cột facebook_id nếu còn tồn tại từ phiên bản cũ
+        cursor.execute('PRAGMA table_info(officers_contact)')
+        columns = [col[1] for col in cursor.fetchall()]
+        if 'facebook_id' in columns:
+            cursor.execute('''
+                CREATE TABLE officers_contact_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT UNIQUE NOT NULL,
+                    telegram_id TEXT,
+                    phone TEXT,
+                    email TEXT
+                )
+            ''')
+            cursor.execute('''
+                INSERT INTO officers_contact_new (id, name, telegram_id, phone, email)
+                SELECT id, name, telegram_id, phone, email FROM officers_contact
+            ''')
+            cursor.execute('DROP TABLE officers_contact')
+            cursor.execute('ALTER TABLE officers_contact_new RENAME TO officers_contact')
         
         conn.commit()
         conn.close()
@@ -79,14 +98,14 @@ class DatabaseManager:
         conn.commit()
         conn.close()
     
-    def add_or_update_officer_contact(self, name, telegram_id=None, facebook_id=None, phone=None, email=None):
+    def add_or_update_officer_contact(self, name, telegram_id=None, phone=None, email=None):
         """Thêm hoặc cập nhật thông tin liên hệ cán bộ"""
         conn = sqlite3.connect(self.db_file)
         cursor = conn.cursor()
         cursor.execute('''
-            INSERT OR REPLACE INTO officers_contact (name, telegram_id, facebook_id, phone, email)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (name, telegram_id, facebook_id, phone, email))
+            INSERT OR REPLACE INTO officers_contact (name, telegram_id, phone, email)
+            VALUES (?, ?, ?, ?)
+        ''', (name, telegram_id, phone, email))
         conn.commit()
         conn.close()
     
