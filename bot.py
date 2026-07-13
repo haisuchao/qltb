@@ -1,6 +1,7 @@
 
 import logging
 import asyncio
+import os
 from datetime import datetime, time, timezone, timedelta
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, ConversationHandler, MessageHandler, filters
@@ -55,6 +56,10 @@ class DutyBot:
         logger.info(f"User {user.full_name} ({user.id}) started the bot")
 
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_id = str(update.effective_user.id)
+        is_admin = hasattr(config, 'ADMIN_IDS') and user_id in config.ADMIN_IDS
+        keycap = "️⃣"  # hậu tố để ghép số -> emoji khung số (1️⃣, 2️⃣...)
+
         help_text = (
             "📖 <b>HƯỚNG DẪN SỬ DỤNG CHI TIẾT</b>\n\n"
             "1️⃣ <b>Xem lịch:</b>\n"
@@ -74,7 +79,25 @@ class DutyBot:
             "   <i>VD: /change 01/05/2026 sáng \"Trần Văn B\" \"Lý do...\"</i>\n"
             "• <code>/swap [ngày1] [ca1] [ngày2] [ca2]</code>: Đổi chéo 2 ca\n"
             "   <i>VD: /swap 01/02 sáng 02/02 chiều</i>\n\n"
-            "4️⃣ <b>Quy định:</b>\n"
+        )
+
+        section_num = 4
+        if is_admin:
+            help_text += (
+                f"{section_num}{keycap} <b>Quản lý & Thống kê (Admin):</b>\n"
+                "• <code>/auto_schedule [m-yyyy] [tên] | [lãnh đạo]</code>: Xếp lịch tự động vòng tròn\n"
+                "   <i>VD: /auto_schedule 3-2026 | Lãnh Đạo A, Lãnh Đạo B</i>\n"
+                "• <code>/send_noti [ngày] [ca]</code>: Gửi thông báo thủ công\n"
+                "   <i>VD: /send_noti 30/01/2026 sáng</i>\n"
+                "• <code>/stats</code>: Thống kê tổng hợp số buổi trực\n"
+                "• <code>/start_new_year [year]</code>: Tạo file lịch trực chuẩn cho năm học mới\n"
+                "   <i>VD: /start_new_year 2026 (bỏ trống sẽ lấy năm hiện tại)</i>\n"
+                "• <code>/set_current_year [year]</code>: Chỉnh tay năm học đang được quản lý\n\n"
+            )
+            section_num += 1
+
+        help_text += (
+            f"{section_num}{keycap} <b>Quy định:</b>\n"
             "• Bot tự động gửi thông báo nhắc lịch vào 15:00 hàng ngày.\n"
             "• Lệnh <code>/swap</code> yêu cầu chính chủ hoặc Admin xác nhận."
         )
@@ -708,6 +731,64 @@ class DutyBot:
             logger.error(f"Error in auto_schedule: {e}")
             await update.message.reply_text(f"❌ Có lỗi xảy ra: {str(e)}")
 
+    async def start_new_year_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Tạo file Excel chuẩn cho năm học mới: /start_new_year [year]"""
+        user_id = str(update.effective_user.id)
+        if hasattr(config, 'ADMIN_IDS') and user_id not in config.ADMIN_IDS:
+            await update.message.reply_text("⛔ Bạn không có quyền thực hiện lệnh này.")
+            return
+
+        year_arg = context.args[0] if context.args else None
+        if year_arg is not None and not year_arg.isdigit():
+            await update.message.reply_text("❌ Năm không hợp lệ. Ví dụ: /start_new_year 2026")
+            return
+
+        await update.message.reply_text(
+            f"⏳ Đang tạo file lịch trực cho năm học mới"
+            f"{f' ({year_arg}-{int(year_arg)+1})' if year_arg else ''}..."
+        )
+
+        success, message, filepath = self.schedule_mgr.start_new_year(year_arg)
+
+        if success:
+            try:
+                with open(filepath, 'rb') as doc:
+                    await update.message.reply_document(
+                        document=doc,
+                        filename=os.path.basename(filepath),
+                        caption=f"✅ {message}"
+                    )
+            except Exception as e:
+                await update.message.reply_text(f"✅ {message}\n⚠️ Không gửi được file đính kèm: {e}")
+        else:
+            await update.message.reply_text(f"❌ Lỗi: {message}")
+
+    async def set_current_year_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Chỉnh tay năm học đang được quản lý: /set_current_year <year>"""
+        user_id = str(update.effective_user.id)
+        if hasattr(config, 'ADMIN_IDS') and user_id not in config.ADMIN_IDS:
+            await update.message.reply_text("⛔ Bạn không có quyền thực hiện lệnh này.")
+            return
+
+        if not context.args or not context.args[0].isdigit():
+            years = self.db.get_all_years()
+            years_str = ", ".join(f"{y}-{y+1}{' (hiện tại)' if cur else ''}" for y, _, cur in years) or "chưa có năm nào"
+            await update.message.reply_text(
+                f"❌ Vui lòng nhập năm. Ví dụ: /set_current_year 2026\n"
+                f"Các năm hiện có: {years_str}"
+            )
+            return
+
+        year = int(context.args[0])
+        try:
+            self.db.set_current_year(year)
+            await update.message.reply_text(f"✅ Đã chuyển năm hiện tại đang quản lý sang {year}-{year+1}.")
+            logger.info(f"Admin {update.effective_user.full_name} set current year to {year}")
+        except ValueError as e:
+            await update.message.reply_text(
+                f"❌ {e}. Năm này chưa có file template — dùng /start_new_year {year} để tạo trước."
+            )
+
 
 if __name__ == '__main__':
     if 'YOUR_TELEGRAM_BOT_TOKEN' in config.TELEGRAM_BOT_TOKEN:
@@ -731,7 +812,9 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("swap", bot_logic.swap_schedule))
     app.add_handler(CommandHandler("stats", bot_logic.stats_command))
     app.add_handler(CommandHandler("auto_schedule", bot_logic.auto_schedule_command))
-    
+    app.add_handler(CommandHandler("start_new_year", bot_logic.start_new_year_command))
+    app.add_handler(CommandHandler("set_current_year", bot_logic.set_current_year_command))
+
     # Job Queue
     job_queue = app.job_queue
     # Parse configured time

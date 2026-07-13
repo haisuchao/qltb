@@ -53,6 +53,15 @@ class DatabaseManager:
             )
         ''')
 
+        # Bảng lưu các năm học đã có file template và năm đang được quản lý (current)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS available_years (
+                year INTEGER PRIMARY KEY,
+                filename TEXT NOT NULL,
+                is_current BOOLEAN NOT NULL DEFAULT 0
+            )
+        ''')
+
         # Migration: xóa cột facebook_id nếu còn tồn tại từ phiên bản cũ
         cursor.execute('PRAGMA table_info(officers_contact)')
         columns = [col[1] for col in cursor.fetchall()]
@@ -127,7 +136,50 @@ class DatabaseManager:
         conn.close()
         return result
 
-    
+    def add_available_year(self, year, filename):
+        """Đăng ký một năm học có file template tương ứng (không tự đổi is_current)"""
+        conn = sqlite3.connect(self.db_file)
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO available_years (year, filename, is_current)
+            VALUES (?, ?, 0)
+            ON CONFLICT(year) DO UPDATE SET filename = excluded.filename
+        ''', (year, filename))
+        conn.commit()
+        conn.close()
+
+    def set_current_year(self, year):
+        """Đặt một năm học làm năm hiện tại (is_current=True), các năm khác về False"""
+        conn = sqlite3.connect(self.db_file)
+        cursor = conn.cursor()
+        cursor.execute('SELECT 1 FROM available_years WHERE year = ?', (year,))
+        if not cursor.fetchone():
+            conn.close()
+            raise ValueError(f"Năm {year} chưa có trong danh sách available_years")
+        cursor.execute('UPDATE available_years SET is_current = 0')
+        cursor.execute('UPDATE available_years SET is_current = 1 WHERE year = ?', (year,))
+        conn.commit()
+        conn.close()
+
+    def get_current_year_row(self):
+        """Lấy (year, filename) của năm đang được quản lý hiện tại, hoặc None"""
+        conn = sqlite3.connect(self.db_file)
+        cursor = conn.cursor()
+        cursor.execute('SELECT year, filename FROM available_years WHERE is_current = 1 LIMIT 1')
+        result = cursor.fetchone()
+        conn.close()
+        return result
+
+    def get_all_years(self):
+        """Lấy toàn bộ danh sách năm học đã có template: [(year, filename, is_current), ...]"""
+        conn = sqlite3.connect(self.db_file)
+        cursor = conn.cursor()
+        cursor.execute('SELECT year, filename, is_current FROM available_years ORDER BY year')
+        results = cursor.fetchall()
+        conn.close()
+        return results
+
+
     def get_notification_history(self, start_date=None, end_date=None):
         """Lấy lịch sử thông báo"""
         conn = sqlite3.connect(self.db_file)

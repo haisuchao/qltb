@@ -3,30 +3,64 @@
 
 import pandas as pd
 import os
+import re
 import glob
 from datetime import datetime, timedelta
 import config
 from database import DatabaseManager
 
 
+def get_schedule_filename(year):
+    """Tên file chuẩn cho năm học bắt đầu từ 'year' (VD: year=2025 -> LichTrucBan_2025-2026.xlsx)"""
+    return f"LichTrucBan_{year}-{year + 1}.xlsx"
+
+
+SCHEDULE_FILENAME_PATTERN = re.compile(r'^LichTrucBan_(\d{4})-(\d{4})(?:_.*)?\.xlsx$')
+
+
 class ScheduleManager:
     def __init__(self):
         self.db = DatabaseManager()
-    
+        self._seed_available_years_if_empty()
+
+    def _seed_available_years_if_empty(self):
+        """Nếu bảng available_years trống, quét thư mục lịch trực để đăng ký các file đã có sẵn
+        (đảm bảo nâng cấp từ phiên bản cũ không làm mất cấu hình hiện có)."""
+        if self.db.get_all_years():
+            return
+
+        found = []
+        for filepath in glob.glob(os.path.join(config.SCHEDULE_FOLDER, "*.xlsx")):
+            match = SCHEDULE_FILENAME_PATTERN.match(os.path.basename(filepath))
+            if match:
+                found.append((int(match.group(1)), os.path.basename(filepath)))
+
+        if not found:
+            return
+
+        for year, filename in found:
+            self.db.add_available_year(year, filename)
+
+        latest_year = max(year for year, _ in found)
+        self.db.set_current_year(latest_year)
+
     def get_schedule_sheet_name(self, date):
         """Lấy tên sheet tương ứng với tháng của ngày cần tra cứu"""
         # Format sheet name: m-yyyy (ví dụ: 8-2025)
         return f"{date.month}-{date.year}"
-    
+
     def get_master_schedule_path(self):
-        """Lấy đường dẫn file lịch trực tổng hợp"""
-        # Ưu tiên file master được cấu hình
-        if hasattr(config, 'MASTER_SCHEDULE_FILE'):
-             path = os.path.join(config.SCHEDULE_FOLDER, config.MASTER_SCHEDULE_FILE)
-             if os.path.exists(path):
-                 return path
-        
-        # Fallback: tìm file Excel bất kỳ trong thư mục
+        """Lấy đường dẫn file lịch trực tổng hợp (dựa vào năm học đang được quản lý trong DB)"""
+        row = self.db.get_current_year_row()
+        if row:
+            year, filename = row
+            path = os.path.join(config.SCHEDULE_FOLDER, filename)
+            if os.path.exists(path):
+                return path
+            print(f"⚠️ File của năm hiện tại ({filename}) không tồn tại trên đĩa.")
+
+        # Fallback cuối cùng: tìm file Excel bất kỳ trong thư mục (tránh 'chết cứng' nếu DB trống bất thường)
+        print("⚠️ Không xác định được năm hiện tại từ DB, dùng fallback tìm file bất kỳ. Hãy dùng /set_current_year.")
         files = glob.glob(os.path.join(config.SCHEDULE_FOLDER, "*.xlsx"))
         if files:
             return files[0]
@@ -272,26 +306,27 @@ class ScheduleManager:
         return stats
 
     def generate_full_report(self):
-        """Tạo bảng thống kê tổng hợp n+2 cột vào sheet đầu tiên của file Excel"""
+        """Cập nhật bảng thống kê tổng hợp vào sheet 'Tổng' của file Excel
+        (sheet này cũng chính là sheet được start_new_year khởi tạo ban đầu)"""
         filepath = self.get_master_schedule_path()
         if not filepath:
             return False, "Không tìm thấy file Excel"
-            
+
         try:
             xl = pd.ExcelFile(filepath)
             # Lấy danh sách các sheet tháng (có format m-yyyy)
             month_sheets = [s for s in xl.sheet_names if '-' in s and s.split('-')[0].isdigit()]
-            
+
             if not month_sheets:
                 return False, "Không tìm thấy dữ liệu các tháng"
-            
+
             # Sắp xếp các sheet theo thời gian (giả sử tên sheet là m-yyyy)
             def sheet_sort_key(s):
                 m, y = map(int, s.split('-'))
                 return y * 12 + m
-            
+
             month_sheets.sort(key=sheet_sort_key)
-            
+
             all_officers = set()
             monthly_data = {} # {sheet_name: {officer: count}}
 
@@ -299,78 +334,83 @@ class ScheduleManager:
                 # Đọc dữ liệu tháng
                 df = pd.read_excel(filepath, sheet_name=sheet, header=3)
                 if len(df.columns) < 4: continue
-                
+
                 counts = {}
                 # Duyệt qua từng dòng để kiểm tra ô gộp (Nghỉ lễ/Tết)
                 # Thông thường ô gộp sẽ có giá trị Sáng == Chiều
                 for _, row in df.iterrows():
                     morning = str(row.iloc[2]).strip() if pd.notna(row.iloc[2]) else ""
                     afternoon = str(row.iloc[3]).strip() if pd.notna(row.iloc[3]) else ""
-                    
+
                     # Nếu Sáng == Chiều và không rỗng -> Thường là ô gộp (Nghỉ lễ/Tết) -> Bỏ qua
                     if morning == afternoon and morning != "":
                         continue
-                    
+
                     # Danh sách các từ khóa cần bỏ qua (không phải tên người)
                     blacklist = ['x', '-', 'nghỉ', 'nan', 'thứ 7', 'chủ nhật', 'tết']
-                    
+
                     # Thống kê Sáng
                     if morning and not any(word in morning.lower() for word in blacklist):
                         counts[morning] = counts.get(morning, 0) + 1
                         all_officers.add(morning)
-                    
+
                     # Thống kê Chiều
                     if afternoon and not any(word in afternoon.lower() for word in blacklist):
                         counts[afternoon] = counts.get(afternoon, 0) + 1
                         all_officers.add(afternoon)
-                        
+
                 monthly_data[sheet] = counts
 
-            # Tạo DataFrame kết quả
-            report_rows = []
-            officers_list = sorted(list(all_officers))
-            
-            for officer in officers_list:
-                row = {'Họ tên': officer}
-                total = 0
-                for sheet in month_sheets:
-                    count = monthly_data[sheet].get(officer, 0)
-                    row[sheet] = count
-                    total += count
-                row['Tổng cộng'] = total
-                report_rows.append(row)
-                
-            df_report = pd.DataFrame(report_rows)
-            
-            # Đảm bảo thứ tự cột: Họ tên, các tháng, Tổng cộng
-            cols = ['Họ tên'] + month_sheets + ['Tổng cộng']
-            df_report = df_report[cols]
-            
-            # Ghi vào file Excel (Sử dụng openpyxl để chèn sheet vào đầu)
+            # Thứ tự cán bộ: theo "DS trực" (giữ nguyên STT); ai không có trong DS trực thì thêm cuối, không có STT
+            roster = self._read_ds_truc_roster(filepath)
+            roster_names = {o['name'] for o in roster}
+            extra_officers = sorted(o for o in all_officers if o not in roster_names)
+            ordered = [(o['stt'], o['name']) for o in roster] + [(None, name) for name in extra_officers]
+
+            # Ghi vào sheet "Tổng": header dòng 5 (STT, Họ tên, các tháng dạng ngày, Tổng cộng), dòng cuối = tổng cột
             from openpyxl import load_workbook
+            from openpyxl.styles import Font
             wb = load_workbook(filepath)
-            
-            summary_sheet_name = "Thống kê Tổng hợp"
+
+            summary_sheet_name = "Tổng"
             if summary_sheet_name in wb.sheetnames:
                 del wb[summary_sheet_name]
-            
+
             # Tạo sheet mới ở vị trí đầu tiên
             ws = wb.create_sheet(summary_sheet_name, 0)
-            
-            # Ghi tiêu đề
-            for j, col_name in enumerate(cols, 1):
-                ws.cell(row=1, column=j, value=col_name)
-            
-            # Ghi dữ liệu
-            for i, row_data in enumerate(report_rows, 2):
-                ws.cell(row=i, column=1, value=row_data['Họ tên'])
-                for j, sheet in enumerate(month_sheets, 2):
-                    ws.cell(row=i, column=j, value=row_data[sheet])
-                ws.cell(row=i, column=len(cols), value=row_data['Tổng cộng'])
-            
+
+            ws.cell(row=5, column=1, value='STT').font = Font(bold=True)
+            ws.cell(row=5, column=2, value='Họ tên').font = Font(bold=True)
+            for j, sheet in enumerate(month_sheets, 3):
+                m, y = map(int, sheet.split('-'))
+                cell = ws.cell(row=5, column=j, value=datetime(y, m, 1))
+                cell.number_format = 'mm/yyyy'
+                cell.font = Font(bold=True)
+            total_col = len(month_sheets) + 3
+            ws.cell(row=5, column=total_col, value='Tổng cộng').font = Font(bold=True)
+
+            row_idx = 6
+            col_totals = [0] * len(month_sheets)
+            for stt, name in ordered:
+                ws.cell(row=row_idx, column=1, value=stt)
+                ws.cell(row=row_idx, column=2, value=name)
+                total = 0
+                for j, sheet in enumerate(month_sheets):
+                    count = monthly_data[sheet].get(name, 0)
+                    ws.cell(row=row_idx, column=3 + j, value=count)
+                    col_totals[j] += count
+                    total += count
+                ws.cell(row=row_idx, column=total_col, value=total)
+                row_idx += 1
+
+            # Dòng tổng cộng cuối bảng
+            for j, col_total in enumerate(col_totals):
+                ws.cell(row=row_idx, column=3 + j, value=col_total)
+            ws.cell(row=row_idx, column=total_col, value=sum(col_totals))
+
             wb.save(filepath)
-            return True, "Đã cập nhật bảng thống kê vào file Excel."
-            
+            return True, "Đã cập nhật bảng thống kê vào sheet 'Tổng'."
+
         except Exception as e:
             print(f"Lỗi generate report: {e}")
             return False, str(e)
@@ -767,3 +807,180 @@ class ScheduleManager:
             import traceback
             traceback.print_exc()
             return False, str(e)
+
+    def _read_ds_truc_roster(self, filepath=None):
+        """Đọc STT + Họ tên từ sheet 'DS trực' của file chỉ định (mặc định: file năm hiện tại)"""
+        if filepath is None:
+            filepath = self.get_master_schedule_path()
+        if not filepath:
+            return []
+
+        try:
+            df = pd.read_excel(filepath, sheet_name='DS trực', header=0)
+            roster = []
+            for _, row in df.iterrows():
+                name = str(row.iloc[1]).strip() if pd.notna(row.iloc[1]) else ""
+                if not name or name == "nan":
+                    continue
+                stt = row.iloc[0]
+                if pd.notna(stt):
+                    try:
+                        stt = int(stt)
+                    except (TypeError, ValueError):
+                        pass
+                else:
+                    stt = None
+                roster.append({'stt': stt, 'name': name})
+            return roster
+        except Exception as e:
+            print(f"Lỗi đọc DS trực để copy sang năm mới: {e}")
+            return []
+
+    def start_new_year(self, year=None):
+        """
+        Tạo file Excel chuẩn cho năm học mới (tháng 8/year -> tháng 6/year+1).
+        - Sheet 'DS trực': copy tên từ DS trực năm hiện tại, xóa cột Miễn/Lý do.
+        - Sheet 'Tổng': liệt kê tên từ DS trực vừa tạo, số liệu = 0.
+        - 11 sheet tháng: khung Ngày/Thứ, để trống Sáng/Chiều/Lãnh đạo (chờ /auto_schedule hoặc nhập tay).
+        - Đăng ký năm mới vào available_years, cập nhật current_year = max(year, current hiện tại).
+        Trả về (success, message, filepath)
+        """
+        from openpyxl import Workbook
+        from openpyxl.styles import Alignment, Border, Side, Font
+        import calendar
+
+        try:
+            year = int(year) if year else datetime.now().year
+        except (TypeError, ValueError):
+            return False, f"Năm không hợp lệ: {year}", None
+
+        if year < 2000 or year > 2100:
+            return False, f"Năm không hợp lệ: {year}", None
+
+        filename = get_schedule_filename(year)
+        filepath = os.path.join(config.SCHEDULE_FOLDER, filename)
+
+        if os.path.exists(filepath):
+            return False, (
+                f"⚠️ File '{filename}' đã tồn tại cho năm học {year}-{year + 1}. "
+                f"Không tạo mới để tránh mất dữ liệu đã có. "
+                f"Nếu muốn tạo lại từ đầu, hãy tự đổi tên/xóa file cũ trước, "
+                f"hoặc dùng /set_current_year {year} nếu chỉ cần chuyển năm quản lý."
+            ), None
+
+        # Đọc danh sách cán bộ từ năm hiện tại TRƯỚC khi đổi current_year
+        roster = self._read_ds_truc_roster()
+
+        try:
+            wb = Workbook()
+            wb.remove(wb.active)  # Bỏ sheet mặc định "Sheet"
+
+            border = Border(left=Side(style='thin'), right=Side(style='thin'),
+                             top=Side(style='thin'), bottom=Side(style='thin'))
+
+            # --- Sheet "DS trực" ---
+            ws_ds = wb.create_sheet('DS trực')
+            for col, header in enumerate(['STT', 'Họ tên trực ban', 'Miễn', 'Lý do'], 1):
+                cell = ws_ds.cell(row=1, column=col, value=header)
+                cell.font = Font(bold=True)
+
+            for i, officer in enumerate(roster, 1):
+                stt = officer['stt'] if officer['stt'] is not None else i
+                ws_ds.cell(row=i + 1, column=1, value=stt)
+                ws_ds.cell(row=i + 1, column=2, value=officer['name'])
+
+            ws_ds.column_dimensions['A'].width = 8
+            ws_ds.column_dimensions['B'].width = 30
+            ws_ds.column_dimensions['C'].width = 10
+            ws_ds.column_dimensions['D'].width = 25
+
+            # Các tháng của năm học: 8/year -> 6/(year+1)
+            months = [(8, year), (9, year), (10, year), (11, year), (12, year),
+                      (1, year + 1), (2, year + 1), (3, year + 1), (4, year + 1),
+                      (5, year + 1), (6, year + 1)]
+
+            # --- Sheet "Tổng" (khớp layout thật: header dòng 5, cột tháng dạng ngày) ---
+            ws_tong = wb.create_sheet('Tổng')
+            ws_tong.cell(row=5, column=1, value='STT').font = Font(bold=True)
+            ws_tong.cell(row=5, column=2, value='Họ tên').font = Font(bold=True)
+            for j, (m, y) in enumerate(months, 3):
+                cell = ws_tong.cell(row=5, column=j, value=datetime(y, m, 1))
+                cell.number_format = 'mm/yyyy'
+                cell.font = Font(bold=True)
+            total_col = len(months) + 3
+            ws_tong.cell(row=5, column=total_col, value='Tổng cộng').font = Font(bold=True)
+
+            data_row = 6
+            for i, officer in enumerate(roster, 1):
+                stt = officer['stt'] if officer['stt'] is not None else i
+                ws_tong.cell(row=data_row, column=1, value=stt)
+                ws_tong.cell(row=data_row, column=2, value=officer['name'])
+                for j in range(3, total_col + 1):
+                    ws_tong.cell(row=data_row, column=j, value=0)
+                data_row += 1
+
+            # Dòng tổng cộng cuối bảng
+            for j in range(3, total_col + 1):
+                ws_tong.cell(row=data_row, column=j, value=0)
+
+            # --- Các sheet tháng (khung trống, sẵn sàng cho /auto_schedule hoặc nhập tay) ---
+            day_names = ["Thứ Hai", "Thứ Ba", "Thứ Tư", "Thứ Năm", "Thứ Sáu", "Thứ Bảy", "Chủ Nhật"]
+            for m, y in months:
+                ws = wb.create_sheet(f"{m}-{y}")
+
+                ws.merge_cells('A1:E1')
+                ws['A1'] = f"LỊCH TRỰC BAN THÁNG {m} NĂM {y}"
+                ws['A1'].font = Font(size=14, bold=True)
+                ws['A1'].alignment = Alignment(horizontal='center')
+
+                for col, header in enumerate(["Ngày", "Thứ", "Trực ban 1", "Trực ban 2", "Lãnh đạo trực"], 1):
+                    cell = ws.cell(row=4, column=col, value=header)
+                    cell.font = Font(bold=True)
+                    cell.alignment = Alignment(horizontal='center')
+
+                last_day = calendar.monthrange(y, m)[1]
+                row_idx = 5
+                for day in range(1, last_day + 1):
+                    date_obj = datetime(y, m, day)
+                    weekday = date_obj.weekday()
+
+                    date_cell = ws.cell(row=row_idx, column=1, value=date_obj)
+                    date_cell.number_format = 'dd/mm/yyyy'
+                    ws.cell(row=row_idx, column=2, value=day_names[weekday])
+                    ws.cell(row=row_idx, column=3, value="")
+                    ws.cell(row=row_idx, column=4, value="")
+                    ws.cell(row=row_idx, column=5, value="")
+                    row_idx += 1
+
+                for r in range(4, row_idx):
+                    for c in range(1, 6):
+                        ws.cell(row=r, column=c).border = border
+
+                ws.column_dimensions['A'].width = 15
+                ws.column_dimensions['B'].width = 12
+                ws.column_dimensions['C'].width = 25
+                ws.column_dimensions['D'].width = 25
+                ws.column_dimensions['E'].width = 25
+
+            os.makedirs(config.SCHEDULE_FOLDER, exist_ok=True)
+            wb.save(filepath)
+
+            # --- Đăng ký năm mới + cập nhật current_year ---
+            existing_row = self.db.get_current_year_row()
+            existing_current = existing_row[0] if existing_row else None
+
+            self.db.add_available_year(year, filename)
+            new_current = max(year, existing_current) if existing_current is not None else year
+            self.db.set_current_year(new_current)
+
+            return True, (
+                f"Đã tạo file '{filename}' cho năm học {year}-{year + 1} "
+                f"({len(roster)} cán bộ copy từ DS trực năm trước). "
+                f"Năm hiện tại đang quản lý: {new_current}."
+            ), filepath
+
+        except Exception as e:
+            print(f"Lỗi start_new_year: {e}")
+            import traceback
+            traceback.print_exc()
+            return False, str(e), None

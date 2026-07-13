@@ -5,7 +5,8 @@ import os
 
 # Cấu hình đường dẫn
 SCHEDULE_FOLDER = "lich-truc-ban"
-MASTER_SCHEDULE_FILE = "LichTrucBan_2025-2026.xlsx"
+# Tên file lịch trực theo năm học được tự động quản lý qua bảng available_years trong DB
+# (dùng /start_new_year để tạo, /set_current_year để chỉnh tay năm hiện tại).
 
 LOG_FOLDER = "logs"
 DATABASE_FILE = "truc_ban.db"

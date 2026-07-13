@@ -52,6 +52,9 @@ Hệ thống yêu cầu file Excel phải đúng định dạng để có thể 
 3. **Vị trí file**:
    - Chép file Excel vào thư mục `lich-truc-ban` ngay trong thư mục dự án.
 
+   > [!NOTE]
+   > Từ phiên bản này, hệ thống **không còn hardcode tên file** trong `config.py` nữa. Tên file lịch trực theo năm học (VD: `LichTrucBan_2025-2026.xlsx`) được quản lý tự động qua lệnh `/start_new_year` (xem mục 3 bên dưới). Nếu bạn có sẵn file cũ đúng định dạng tên `LichTrucBan_<năm bắt đầu>-<năm kết thúc>.xlsx` trong thư mục `lich-truc-ban`, bot sẽ tự nhận diện khi khởi động lần đầu.
+
 ---
 
 ## 📋 2. CÁC LỆNH ĐIỀU KHIỂN BOT
@@ -71,11 +74,43 @@ Hệ thống yêu cầu file Excel phải đúng định dạng để có thể 
 | `/stats` | (Admin) Thống kê tổng hợp số buổi trực | `/stats` |
 | `/send_noti` | (Admin) Gửi thông báo thủ công | `/send_noti 30/01/2026` |
 | `/auto_schedule` | (Admin) Xếp lịch tự động vòng tròn | `/auto_schedule 3-2026 \| Lãnh Đạo A, Lãnh Đạo B` |
+| `/start_new_year` | (Admin) Tạo file lịch trực cho năm học mới | `/start_new_year 2026` |
+| `/set_current_year` | (Admin) Chỉnh tay năm học đang được quản lý | `/set_current_year 2026` |
 | `/help` | Xem hướng dẫn chi tiết | `/help` |
 
 ---
 
-## 📅 3. TỰ ĐỘNG XẾP LỊCH (ADMIN)
+## 🎓 3. QUẢN LÝ NĂM HỌC MỚI (ADMIN)
+Khi kết thúc năm học, dùng lệnh `/start_new_year` để tự động tạo file Excel chuẩn cho năm học tiếp theo, không cần tạo file thủ công hay sửa code.
+
+**Lệnh:**
+```bash
+# Tạo năm học mới bắt đầu từ năm chỉ định (năm kết thúc = năm + 1)
+/start_new_year 2026
+
+# Không nhập năm -> mặc định lấy năm hiện tại
+/start_new_year
+```
+
+**File được tạo ra** (`LichTrucBan_<year>-<year+1>.xlsx`) gồm:
+- Sheet **"DS trực"**: copy danh sách cán bộ từ năm hiện tại (xóa cột Miễn/Lý do để bạn cập nhật lại theo tình hình nhân sự năm mới).
+- Sheet **"Tổng"**: liệt kê sẵn cán bộ (số buổi trực = 0), sẽ được `/stats` tự động cập nhật số liệu thật khi có lịch trực.
+- 11 sheet tháng, từ **tháng 8 của năm bắt đầu** đến **tháng 6 của năm kết thúc** — mỗi sheet đã điền sẵn Ngày/Thứ, cột trực để trống, sẵn sàng dùng `/auto_schedule` hoặc nhập tay.
+
+> [!IMPORTANT]
+> Nếu file của năm đó đã tồn tại sẵn, bot sẽ **báo lỗi và không tạo file mới** (tránh ghi đè/mất dữ liệu đã có). Nếu muốn tạo lại từ đầu, hãy tự đổi tên hoặc xóa file cũ trong thư mục `lich-truc-ban` trước khi chạy lại lệnh.
+
+Sau khi tạo file, hệ thống tự so sánh năm vừa tạo với năm hiện tại đang quản lý, năm nào lớn hơn sẽ tự động trở thành năm hiện tại (`current_year`) — tức là bot sẽ đọc/ghi lịch trên file của năm đó cho các lệnh `/today`, `/check`, `/change`,...
+
+Nếu cần **chỉnh tay** năm đang quản lý (VD: quay lại năm cũ để tra cứu), dùng:
+```bash
+/set_current_year 2025
+```
+Lệnh này chỉ chấp nhận năm đã từng được tạo bằng `/start_new_year` (hoặc đã có sẵn file đúng định dạng tên khi bot khởi động lần đầu).
+
+---
+
+## 📅 4. TỰ ĐỘNG XẾP LỊCH (ADMIN)
 Hệ thống hỗ trợ tính năng tự động xếp lịch theo vòng tròn (Round-robin) giúp tiết kiệm thời gian.
 
 **Đặc điểm:**
@@ -99,14 +134,14 @@ Hệ thống hỗ trợ tính năng tự động xếp lịch theo vòng tròn (
 
 ---
 
-## 🔔 4. THÔNG BÁO TỰ ĐỘNG
-* **Thời gian**: Hệ thống tự động kiểm tra và nhắc lịch vào lúc **16:15** hàng ngày cho ngày hôm sau.
+## 🔔 5. THÔNG BÁO TỰ ĐỘNG
+* **Thời gian**: Hệ thống tự động kiểm tra và nhắc lịch vào lúc **16:00** hàng ngày cho ngày hôm sau.
 * **Đăng ký**: Cần chạy lệnh `/register` một lần duy nhất để hệ thống ghi nhận Telegram ID của bạn.
 * **Xếp lịch tự động hàng tháng**: Hệ thống tự động xếp lịch cho tháng tiếp theo vào ngày 23 hàng tháng (cấu hình trong `config.py`).
 
 ---
 
-## 🚀 5. VẬN HÀNH BOT
+## 🚀 6. VẬN HÀNH BOT
 
 ```bash
 python bot.py
@@ -114,13 +149,15 @@ python bot.py
 
 ---
 
-## ❓ 6. CÂU HỎI THƯỜNG GẶP (FAQ)
+## ❓ 7. CÂU HỎI THƯỜNG GẶP (FAQ)
 * **Q: Dữ liệu lịch trực lưu ở đâu?**
-  - A: Dữ liệu lịch trực được lưu trong file Excel tại thư mục `lich-truc-ban/`. Các log thông báo và lịch sử đổi ca được lưu trong database `truc_ban.db`.
+  - A: Dữ liệu lịch trực được lưu trong file Excel tại thư mục `lich-truc-ban/`. Các log thông báo, lịch sử đổi ca và danh sách năm học (`available_years`) được lưu trong database `truc_ban.db`.
 * **Q: Làm sao để thêm cán bộ mới?**
   - A: Thêm tên cán bộ vào sheet `DS trực` trong file Excel. Cán bộ cũng cần chạy lệnh `/register` trên Telegram để nhận thông báo.
 * **Q: Ai có quyền Admin?**
   - A: Cấu hình danh sách Admin ID trong file `config.py` tại biến `ADMIN_IDS`.
+* **Q: Làm sao để chuyển sang năm học mới?**
+  - A: Dùng lệnh `/start_new_year [year]` (xem mục 3). Không cần sửa `config.py` nữa.
 
 ---
 *Chúc bạn quản lý trực ban hiệu quả!*
