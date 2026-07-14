@@ -5,6 +5,7 @@ import pandas as pd
 import os
 import re
 import glob
+import unicodedata
 from datetime import datetime, timedelta
 import config
 from database import DatabaseManager
@@ -13,6 +14,12 @@ from database import DatabaseManager
 def get_schedule_filename(year):
     """Tên file chuẩn cho năm học bắt đầu từ 'year' (VD: year=2025 -> LichTrucBan_2025-2026.xlsx)"""
     return f"LichTrucBan_{year}-{year + 1}.xlsx"
+
+
+def _normalize_name(name):
+    """Chuẩn hóa tên để so sánh (Unicode NFC + strip + lowercase), tránh lỗi trùng tên
+    do khác dạng dựng sẵn Unicode (dấu tiếng Việt tổ hợp/dựng sẵn) hoặc khoảng trắng thừa."""
+    return unicodedata.normalize('NFC', str(name)).strip().lower()
 
 
 SCHEDULE_FILENAME_PATTERN = re.compile(r'^LichTrucBan_(\d{4})-(\d{4})(?:_.*)?\.xlsx$')
@@ -835,6 +842,321 @@ class ScheduleManager:
         except Exception as e:
             print(f"Lỗi đọc DS trực để copy sang năm mới: {e}")
             return []
+
+    def _open_ds_truc_worksheet(self):
+        """Mở workbook (ghi được) của năm hiện tại và trả về (wb, ws, filepath) cho sheet 'DS trực'.
+        Raise ValueError với thông báo phù hợp nếu không mở được."""
+        from openpyxl import load_workbook
+
+        filepath = self.get_master_schedule_path()
+        if not filepath:
+            raise ValueError("Không tìm thấy file lịch trực của năm hiện tại. Hãy dùng /start_new_year hoặc /set_current_year trước.")
+
+        wb = load_workbook(filepath)
+        if 'DS trực' not in wb.sheetnames:
+            raise ValueError("File Excel không có sheet 'DS trực' (file có thể sai định dạng template).")
+
+        return wb, wb['DS trực'], filepath
+
+    def _find_officer_rows(self, ws, name_normalized):
+        """Tìm tất cả các dòng (>=2) trong sheet 'DS trực' có tên khớp (đã chuẩn hóa)"""
+        matched_rows = []
+        last_data_row = 1  # dòng 1 là header
+        max_stt = 0
+
+        for row_cells in ws.iter_rows(min_row=2, max_row=ws.max_row):
+            if len(row_cells) < 2:
+                continue
+            name_val = row_cells[1].value
+            stt_val = row_cells[0].value
+
+            if name_val is not None and str(name_val).strip():
+                last_data_row = row_cells[0].row
+                if _normalize_name(name_val) == name_normalized:
+                    matched_rows.append(row_cells[0].row)
+
+            if isinstance(stt_val, (int, float)):
+                max_stt = max(max_stt, int(stt_val))
+
+        return matched_rows, last_data_row, max_stt
+
+    def add_officer(self, name):
+        """Thêm cán bộ mới vào sheet 'DS trực'. Trả về (success, message)."""
+        name = (name or "").strip()
+        if not name:
+            return False, "Họ tên không được để trống."
+        if len(name) < 2:
+            return False, "Họ tên quá ngắn (tối thiểu 2 ký tự)."
+
+        name = unicodedata.normalize('NFC', name)
+        name_normalized = _normalize_name(name)
+
+        try:
+            wb, ws, filepath = self._open_ds_truc_worksheet()
+        except ValueError as e:
+            return False, str(e)
+
+        try:
+            matched_rows, last_data_row, max_stt = self._find_officer_rows(ws, name_normalized)
+
+            if matched_rows:
+                return False, f"Cán bộ '{name}' đã có trong danh sách trực (dòng {matched_rows[0]})."
+
+            new_row = last_data_row + 1
+            new_stt = max_stt + 1
+            ws.cell(row=new_row, column=1, value=new_stt)
+            ws.cell(row=new_row, column=2, value=name)
+
+            wb.save(filepath)
+            return True, (
+                f"Đã thêm '{name}' vào DS trực (STT {new_stt}). "
+                f"Chạy /stats để cập nhật sheet 'Tổng'."
+            )
+        except PermissionError:
+            return False, "Không thể ghi file Excel — file có thể đang mở ở chương trình khác trên máy chủ."
+        except Exception as e:
+            print(f"Lỗi add_officer: {e}")
+            return False, str(e)
+
+    def remove_officer(self, name):
+        """Xóa cán bộ khỏi sheet 'DS trực'. Trả về (success, message)."""
+        name = (name or "").strip()
+        if not name:
+            return False, "Họ tên không được để trống."
+
+        name_normalized = _normalize_name(name)
+
+        try:
+            wb, ws, filepath = self._open_ds_truc_worksheet()
+        except ValueError as e:
+            return False, str(e)
+
+        try:
+            matched_rows, _, _ = self._find_officer_rows(ws, name_normalized)
+
+            if not matched_rows:
+                return False, f"Không tìm thấy '{name}' trong DS trực."
+
+            if len(matched_rows) > 1:
+                return False, (
+                    f"Tìm thấy {len(matched_rows)} dòng trùng tên '{name}' (dòng {matched_rows}). "
+                    f"Vui lòng kiểm tra và xóa thủ công trong Excel để tránh xóa nhầm."
+                )
+
+            ws.delete_rows(matched_rows[0], 1)
+            wb.save(filepath)
+
+            return True, (
+                f"Đã xóa '{name}' khỏi DS trực. "
+                f"Lưu ý: các ca trực đã phân công sẵn cho người này trong các sheet tháng (nếu có) "
+                f"sẽ KHÔNG tự động thay đổi — hãy dùng /change nếu cần điều chỉnh. "
+                f"Chạy /stats để cập nhật sheet 'Tổng'."
+            )
+        except PermissionError:
+            return False, "Không thể ghi file Excel — file có thể đang mở ở chương trình khác trên máy chủ."
+        except Exception as e:
+            print(f"Lỗi remove_officer: {e}")
+            return False, str(e)
+
+    def deactivate_officer(self, name, reason=""):
+        """Miễn trực cho 1 cán bộ (đánh dấu 'x' cột Miễn, ghi Lý do nếu có). Trả về (success, message)."""
+        name = (name or "").strip()
+        if not name:
+            return False, "Họ tên không được để trống."
+
+        reason = (reason or "").strip()
+        name_normalized = _normalize_name(name)
+
+        try:
+            wb, ws, filepath = self._open_ds_truc_worksheet()
+        except ValueError as e:
+            return False, str(e)
+
+        try:
+            matched_rows, _, _ = self._find_officer_rows(ws, name_normalized)
+
+            if not matched_rows:
+                return False, f"Không tìm thấy '{name}' trong DS trực."
+
+            if len(matched_rows) > 1:
+                return False, (
+                    f"Tìm thấy {len(matched_rows)} dòng trùng tên '{name}' (dòng {matched_rows}). "
+                    f"Vui lòng kiểm tra và sửa thủ công trong Excel để tránh nhầm lẫn."
+                )
+
+            row_idx = matched_rows[0]
+            current_exempt_val = ws.cell(row=row_idx, column=3).value
+            already_exempt = str(current_exempt_val).strip().lower() == 'x' if current_exempt_val else False
+
+            ws.cell(row=row_idx, column=3, value='x')
+            # Lưu ý: ws.cell(..., value=None) KHÔNG xóa được cell (openpyxl coi None là "không truyền giá trị"),
+            # nên phải gán trực tiếp .value để xóa lý do cũ khi không nhập lý do mới.
+            ws.cell(row=row_idx, column=4).value = reason if reason else None
+
+            wb.save(filepath)
+
+            action = "Đã cập nhật lý do miễn trực" if already_exempt else "Đã miễn trực"
+            reason_note = f" (lý do: {reason})" if reason else " (không có lý do cụ thể)"
+            return True, (
+                f"{action} cho '{name}'{reason_note}. "
+                f"Cán bộ sẽ không được tự động xếp lịch trong lần chạy /auto_schedule tiếp theo."
+            )
+        except PermissionError:
+            return False, "Không thể ghi file Excel — file có thể đang mở ở chương trình khác trên máy chủ."
+        except Exception as e:
+            print(f"Lỗi deactivate_officer: {e}")
+            return False, str(e)
+
+    def activate_officer(self, name):
+        """Bỏ miễn trực, chuyển cán bộ về trạng thái trực bình thường. Trả về (success, message)."""
+        name = (name or "").strip()
+        if not name:
+            return False, "Họ tên không được để trống."
+
+        name_normalized = _normalize_name(name)
+
+        try:
+            wb, ws, filepath = self._open_ds_truc_worksheet()
+        except ValueError as e:
+            return False, str(e)
+
+        try:
+            matched_rows, _, _ = self._find_officer_rows(ws, name_normalized)
+
+            if not matched_rows:
+                return False, f"Không tìm thấy '{name}' trong DS trực."
+
+            if len(matched_rows) > 1:
+                return False, (
+                    f"Tìm thấy {len(matched_rows)} dòng trùng tên '{name}' (dòng {matched_rows}). "
+                    f"Vui lòng kiểm tra và sửa thủ công trong Excel để tránh nhầm lẫn."
+                )
+
+            row_idx = matched_rows[0]
+            current_exempt_val = ws.cell(row=row_idx, column=3).value
+            was_exempt = str(current_exempt_val).strip().lower() == 'x' if current_exempt_val else False
+
+            if not was_exempt:
+                return True, f"'{name}' hiện đã ở trạng thái trực bình thường (không bị miễn), không có gì để thay đổi."
+
+            # Lưu ý: ws.cell(..., value=None) KHÔNG xóa được cell (openpyxl coi None là "không truyền giá trị"),
+            # nên phải gán trực tiếp .value để xóa đánh dấu Miễn/Lý do.
+            ws.cell(row=row_idx, column=3).value = None
+            ws.cell(row=row_idx, column=4).value = None
+
+            wb.save(filepath)
+
+            return True, (
+                f"Đã chuyển '{name}' về trạng thái trực bình thường (bỏ miễn trực). "
+                f"Cán bộ sẽ được đưa vào danh sách khi chạy /auto_schedule lần tới."
+            )
+        except PermissionError:
+            return False, "Không thể ghi file Excel — file có thể đang mở ở chương trình khác trên máy chủ."
+        except Exception as e:
+            print(f"Lỗi activate_officer: {e}")
+            return False, str(e)
+
+    def rename_officer(self, old_name, new_name):
+        """Sửa lại tên cán bộ (VD: ghi sai chính tả). Đồng bộ tên trong sheet 'Tổng', các sheet tháng
+        (Trực sáng/chiều/Lãnh đạo) và danh sách liên hệ Telegram (officers_contact) nếu có.
+        Trả về (success, message)."""
+        old_name = (old_name or "").strip()
+        new_name = (new_name or "").strip()
+
+        if not old_name or not new_name:
+            return False, "Vui lòng nhập đủ tên cũ và tên mới."
+        if len(new_name) < 2:
+            return False, "Tên mới quá ngắn (tối thiểu 2 ký tự)."
+
+        new_name = unicodedata.normalize('NFC', new_name)
+        old_normalized = _normalize_name(old_name)
+        new_normalized = _normalize_name(new_name)
+
+        try:
+            wb, ws, filepath = self._open_ds_truc_worksheet()
+        except ValueError as e:
+            return False, str(e)
+
+        try:
+            matched_rows, _, _ = self._find_officer_rows(ws, old_normalized)
+
+            if not matched_rows:
+                return False, f"Không tìm thấy '{old_name}' trong DS trực."
+
+            if len(matched_rows) > 1:
+                return False, (
+                    f"Tìm thấy {len(matched_rows)} dòng trùng tên '{old_name}' (dòng {matched_rows}). "
+                    f"Vui lòng kiểm tra và sửa thủ công trong Excel để tránh nhầm lẫn."
+                )
+
+            row_idx = matched_rows[0]
+            original_old_name = ws.cell(row=row_idx, column=2).value
+            original_old_name = str(original_old_name).strip() if original_old_name else old_name
+
+            if original_old_name == new_name:
+                return True, f"Tên '{new_name}' đã đúng như hiện tại, không có gì để cập nhật."
+
+            # Kiểm tra tên mới có trùng với MỘT NGƯỜI KHÁC không (loại trừ chính dòng đang sửa)
+            other_matches = [r for r in self._find_officer_rows(ws, new_normalized)[0] if r != row_idx]
+            if other_matches:
+                return False, f"Tên '{new_name}' đã có sẵn trong DS trực (dòng {other_matches[0]}) — không thể đổi trùng."
+
+            ws.cell(row=row_idx, column=2, value=new_name)
+
+            # Đồng bộ tên trong sheet "Tổng" (nếu có) để không cần chờ /stats chạy lại
+            renamed_in_tong = 0
+            if 'Tổng' in wb.sheetnames:
+                ws_tong = wb['Tổng']
+                for row_cells in ws_tong.iter_rows(min_row=6, max_row=ws_tong.max_row):
+                    if len(row_cells) < 2:
+                        continue
+                    name_val = row_cells[1].value
+                    if name_val is not None and _normalize_name(name_val) == old_normalized:
+                        row_cells[1].value = new_name
+                        renamed_in_tong += 1
+
+            # Đồng bộ tên trong các sheet tháng (cột Trực sáng/chiều/Lãnh đạo)
+            renamed_in_months = 0
+            month_sheets = [s for s in wb.sheetnames if '-' in s and s.split('-')[0].isdigit()]
+            for sheet_name in month_sheets:
+                ws_month = wb[sheet_name]
+                for row_cells in ws_month.iter_rows(min_row=5, max_row=ws_month.max_row):
+                    for cell in row_cells[2:5]:  # Cột C, D, E
+                        if cell.value is not None and _normalize_name(cell.value) == old_normalized:
+                            cell.value = new_name
+                            renamed_in_months += 1
+
+            wb.save(filepath)
+
+            # Đồng bộ tên trong danh sách liên hệ Telegram (nếu đã /register dưới tên cũ)
+            contact_note = ""
+            try:
+                rename_result = self.db.rename_officer_contact(original_old_name, new_name)
+                if rename_result == 'renamed':
+                    contact_note = " Đã đồng bộ tên trong danh sách liên hệ Telegram."
+                elif rename_result == 'conflict':
+                    contact_note = (
+                        f" ⚠️ Không đồng bộ được danh sách liên hệ Telegram vì '{new_name}' "
+                        f"đã được đăng ký bởi một Telegram ID khác — hãy kiểm tra thủ công."
+                    )
+            except Exception as e:
+                contact_note = f" ⚠️ Lỗi đồng bộ danh sách liên hệ Telegram: {e}"
+
+            detail_parts = []
+            if renamed_in_months:
+                detail_parts.append(f"{renamed_in_months} ca trực")
+            if renamed_in_tong:
+                detail_parts.append(f"{renamed_in_tong} dòng trong sheet 'Tổng'")
+            detail_note = f" (đã cập nhật thêm {', '.join(detail_parts)})" if detail_parts else ""
+
+            return True, (
+                f"Đã đổi tên '{original_old_name}' → '{new_name}' trong DS trực{detail_note}.{contact_note}"
+            )
+        except PermissionError:
+            return False, "Không thể ghi file Excel — file có thể đang mở ở chương trình khác trên máy chủ."
+        except Exception as e:
+            print(f"Lỗi rename_officer: {e}")
+            return False, str(e)
 
     def start_new_year(self, year=None):
         """

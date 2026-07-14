@@ -92,7 +92,17 @@ class DutyBot:
                 "• <code>/stats</code>: Thống kê tổng hợp số buổi trực\n"
                 "• <code>/start_new_year [year]</code>: Tạo file lịch trực chuẩn cho năm học mới\n"
                 "   <i>VD: /start_new_year 2026 (bỏ trống sẽ lấy năm hiện tại)</i>\n"
-                "• <code>/set_current_year [year]</code>: Chỉnh tay năm học đang được quản lý\n\n"
+                "• <code>/set_current_year [year]</code>: Chỉnh tay năm học đang được quản lý\n"
+                "• <code>/add_officer [Họ tên]</code>: Thêm cán bộ mới vào DS trực\n"
+                "   <i>VD: /add_officer Nguyễn Văn A</i>\n"
+                "• <code>/remove_officer [Họ tên]</code>: Xóa cán bộ khỏi DS trực\n"
+                "   <i>VD: /remove_officer Nguyễn Văn A</i>\n"
+                "• <code>/deactive_officer \"[Họ tên]\" [\"Lý do\"]</code>: Miễn trực cho cán bộ\n"
+                "   <i>VD: /deactive_officer \"Nguyễn Văn A\" \"Đi học VB2\"</i>\n"
+                "• <code>/active_officer [Họ tên]</code>: Bỏ miễn trực, về trực bình thường\n"
+                "   <i>VD: /active_officer Nguyễn Văn A</i>\n"
+                "• <code>/edit_officer \"[Tên cũ]\" \"[Tên mới]\"</code>: Sửa tên cán bộ ghi sai\n"
+                "   <i>VD: /edit_officer \"Nguyễn Văn A\" \"Nguyễn Văn B\"</i>\n\n"
             )
             section_num += 1
 
@@ -789,6 +799,120 @@ class DutyBot:
                 f"❌ {e}. Năm này chưa có file template — dùng /start_new_year {year} để tạo trước."
             )
 
+    async def add_officer_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Thêm cán bộ mới vào DS trực: /add_officer [Họ tên]"""
+        user_id = str(update.effective_user.id)
+        if hasattr(config, 'ADMIN_IDS') and user_id not in config.ADMIN_IDS:
+            await update.message.reply_text("⛔ Bạn không có quyền thực hiện lệnh này.")
+            return
+
+        if not context.args:
+            await update.message.reply_text("❌ Vui lòng nhập họ tên. Ví dụ: /add_officer Nguyễn Văn A")
+            return
+
+        name = " ".join(context.args).strip()
+        success, message = self.schedule_mgr.add_officer(name)
+        await update.message.reply_text(f"{'✅' if success else '❌'} {message}")
+        if success:
+            logger.info(f"Admin {update.effective_user.full_name} added officer '{name}'")
+
+    async def remove_officer_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Xóa cán bộ khỏi DS trực: /remove_officer [Họ tên]"""
+        user_id = str(update.effective_user.id)
+        if hasattr(config, 'ADMIN_IDS') and user_id not in config.ADMIN_IDS:
+            await update.message.reply_text("⛔ Bạn không có quyền thực hiện lệnh này.")
+            return
+
+        if not context.args:
+            await update.message.reply_text("❌ Vui lòng nhập họ tên. Ví dụ: /remove_officer Nguyễn Văn A")
+            return
+
+        name = " ".join(context.args).strip()
+        success, message = self.schedule_mgr.remove_officer(name)
+        await update.message.reply_text(f"{'✅' if success else '❌'} {message}")
+        if success:
+            logger.info(f"Admin {update.effective_user.full_name} removed officer '{name}'")
+
+    async def deactive_officer_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Miễn trực cho cán bộ: /deactive_officer "Họ tên" ["Lý do"]"""
+        user_id = str(update.effective_user.id)
+        if hasattr(config, 'ADMIN_IDS') and user_id not in config.ADMIN_IDS:
+            await update.message.reply_text("⛔ Bạn không có quyền thực hiện lệnh này.")
+            return
+
+        try:
+            command_args = shlex.split(update.message.text)[1:]
+        except ValueError:
+            await update.message.reply_text(
+                "❌ Cú pháp sai (thiếu dấu ngoặc kép đóng). Ví dụ:\n"
+                "/deactive_officer \"Nguyễn Văn A\" \"Đi học VB2\""
+            )
+            return
+
+        if not command_args:
+            await update.message.reply_text(
+                "❌ Vui lòng nhập họ tên (đặt trong ngoặc kép nếu có khoảng trắng). Ví dụ:\n"
+                "/deactive_officer \"Nguyễn Văn A\"\n"
+                "/deactive_officer \"Nguyễn Văn A\" \"Đi học VB2\""
+            )
+            return
+
+        name = command_args[0].strip()
+        reason = " ".join(command_args[1:]).strip()
+
+        success, message = self.schedule_mgr.deactivate_officer(name, reason)
+        await update.message.reply_text(f"{'✅' if success else '❌'} {message}")
+        if success:
+            logger.info(f"Admin {update.effective_user.full_name} deactivated officer '{name}' (reason: {reason})")
+
+    async def active_officer_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Bỏ miễn trực, chuyển cán bộ về trực bình thường: /active_officer [Họ tên]"""
+        user_id = str(update.effective_user.id)
+        if hasattr(config, 'ADMIN_IDS') and user_id not in config.ADMIN_IDS:
+            await update.message.reply_text("⛔ Bạn không có quyền thực hiện lệnh này.")
+            return
+
+        if not context.args:
+            await update.message.reply_text("❌ Vui lòng nhập họ tên. Ví dụ: /active_officer Nguyễn Văn A")
+            return
+
+        name = " ".join(context.args).strip()
+        success, message = self.schedule_mgr.activate_officer(name)
+        await update.message.reply_text(f"{'✅' if success else '❌'} {message}")
+        if success:
+            logger.info(f"Admin {update.effective_user.full_name} activated officer '{name}'")
+
+    async def edit_officer_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        """Sửa tên cán bộ ghi sai: /edit_officer "Tên cũ" "Tên mới" """
+        user_id = str(update.effective_user.id)
+        if hasattr(config, 'ADMIN_IDS') and user_id not in config.ADMIN_IDS:
+            await update.message.reply_text("⛔ Bạn không có quyền thực hiện lệnh này.")
+            return
+
+        try:
+            command_args = shlex.split(update.message.text)[1:]
+        except ValueError:
+            await update.message.reply_text(
+                "❌ Cú pháp sai (thiếu dấu ngoặc kép đóng). Ví dụ:\n"
+                "/edit_officer \"Nguyễn Văn A\" \"Nguyễn Văn B\""
+            )
+            return
+
+        if len(command_args) < 2:
+            await update.message.reply_text(
+                "❌ Vui lòng nhập đủ tên cũ và tên mới (đặt trong ngoặc kép). Ví dụ:\n"
+                "/edit_officer \"Nguyễn Văn A\" \"Nguyễn Văn B\""
+            )
+            return
+
+        old_name = command_args[0].strip()
+        new_name = command_args[1].strip()
+
+        success, message = self.schedule_mgr.rename_officer(old_name, new_name)
+        await update.message.reply_text(f"{'✅' if success else '❌'} {message}")
+        if success:
+            logger.info(f"Admin {update.effective_user.full_name} renamed officer '{old_name}' -> '{new_name}'")
+
 
 if __name__ == '__main__':
     if 'YOUR_TELEGRAM_BOT_TOKEN' in config.TELEGRAM_BOT_TOKEN:
@@ -814,6 +938,11 @@ if __name__ == '__main__':
     app.add_handler(CommandHandler("auto_schedule", bot_logic.auto_schedule_command))
     app.add_handler(CommandHandler("start_new_year", bot_logic.start_new_year_command))
     app.add_handler(CommandHandler("set_current_year", bot_logic.set_current_year_command))
+    app.add_handler(CommandHandler("add_officer", bot_logic.add_officer_command))
+    app.add_handler(CommandHandler("remove_officer", bot_logic.remove_officer_command))
+    app.add_handler(CommandHandler("deactive_officer", bot_logic.deactive_officer_command))
+    app.add_handler(CommandHandler("active_officer", bot_logic.active_officer_command))
+    app.add_handler(CommandHandler("edit_officer", bot_logic.edit_officer_command))
 
     # Job Queue
     job_queue = app.job_queue

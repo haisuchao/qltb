@@ -136,6 +136,26 @@ class DatabaseManager:
         conn.close()
         return result
 
+    def rename_officer_contact(self, old_name, new_name):
+        """Đổi tên trong officers_contact (khi admin sửa tên cán bộ bị ghi sai).
+        Trả về 'renamed', 'not_found', hoặc 'conflict' (tên mới đã được đăng ký bởi người khác)."""
+        conn = sqlite3.connect(self.db_file)
+        cursor = conn.cursor()
+        cursor.execute('SELECT id FROM officers_contact WHERE name = ?', (old_name,))
+        if not cursor.fetchone():
+            conn.close()
+            return 'not_found'
+
+        cursor.execute('SELECT id FROM officers_contact WHERE name = ?', (new_name,))
+        if cursor.fetchone():
+            conn.close()
+            return 'conflict'
+
+        cursor.execute('UPDATE officers_contact SET name = ? WHERE name = ?', (new_name, old_name))
+        conn.commit()
+        conn.close()
+        return 'renamed'
+
     def add_available_year(self, year, filename):
         """Đăng ký một năm học có file template tương ứng (không tự đổi is_current)"""
         conn = sqlite3.connect(self.db_file)

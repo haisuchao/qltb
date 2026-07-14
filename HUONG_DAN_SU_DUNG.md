@@ -76,6 +76,11 @@ Hệ thống yêu cầu file Excel phải đúng định dạng để có thể 
 | `/auto_schedule` | (Admin) Xếp lịch tự động vòng tròn | `/auto_schedule 3-2026 \| Lãnh Đạo A, Lãnh Đạo B` |
 | `/start_new_year` | (Admin) Tạo file lịch trực cho năm học mới | `/start_new_year 2026` |
 | `/set_current_year` | (Admin) Chỉnh tay năm học đang được quản lý | `/set_current_year 2026` |
+| `/add_officer` | (Admin) Thêm cán bộ mới vào DS trực | `/add_officer Nguyễn Văn A` |
+| `/remove_officer` | (Admin) Xóa cán bộ khỏi DS trực | `/remove_officer Nguyễn Văn A` |
+| `/deactive_officer` | (Admin) Miễn trực cho cán bộ (kèm lý do) | `/deactive_officer "Nguyễn Văn A" "Đi học VB2"` |
+| `/active_officer` | (Admin) Bỏ miễn trực, về trực bình thường | `/active_officer Nguyễn Văn A` |
+| `/edit_officer` | (Admin) Sửa tên cán bộ ghi sai | `/edit_officer "Nguyễn Văn A" "Nguyễn Văn B"` |
 | `/help` | Xem hướng dẫn chi tiết | `/help` |
 
 ---
@@ -110,7 +115,58 @@ Lệnh này chỉ chấp nhận năm đã từng được tạo bằng `/start_n
 
 ---
 
-## 📅 4. TỰ ĐỘNG XẾP LỊCH (ADMIN)
+## 👥 4. QUẢN LÝ DANH SÁCH CÁN BỘ (ADMIN)
+Quản lý trực tiếp sheet "DS trực" của năm hiện tại mà không cần mở Excel thủ công.
+
+**Thêm cán bộ mới:**
+```bash
+/add_officer Nguyễn Văn A
+```
+- Bot tự kiểm tra trùng tên (không phân biệt hoa/thường, khoảng trắng thừa) — nếu đã có sẽ báo lỗi kèm số dòng.
+- STT mới = STT lớn nhất hiện có + 1.
+- Sau khi thêm, chạy `/stats` để cập nhật số liệu vào sheet "Tổng".
+
+**Xóa cán bộ khỏi danh sách:**
+```bash
+/remove_officer Nguyễn Văn A
+```
+- Báo lỗi nếu không tìm thấy tên trong DS trực.
+- Nếu phát hiện nhiều dòng trùng tên (dữ liệu bị sửa tay trước đó), bot sẽ **không tự xóa** để tránh xóa nhầm — bạn cần vào Excel kiểm tra thủ công.
+- Lưu ý: xóa khỏi DS trực **không** tự động xóa các ca đã phân công cho người này trong các sheet tháng — cần dùng `/change` để thay người nếu họ đã có lịch sắp tới.
+
+**Miễn trực (kèm lý do):**
+```bash
+/deactive_officer "Nguyễn Văn A" "Đi học VB2"
+# Hoặc không cần lý do:
+/deactive_officer "Nguyễn Văn A"
+```
+- Đặt tên trong dấu ngoặc kép (bắt buộc nếu tên có khoảng trắng, luôn đúng với tên tiếng Việt).
+- Đánh dấu cột "Miễn" = `x`, ghi lý do vào cột "Lý do" nếu có.
+- Cán bộ bị miễn sẽ không được đưa vào danh sách khi chạy `/auto_schedule` (nếu để bot tự lấy tên từ DS trực).
+- Nếu cán bộ đã được miễn trước đó, chạy lại lệnh sẽ chỉ cập nhật lý do mới.
+
+**Bỏ miễn trực (về trực bình thường):**
+```bash
+/active_officer Nguyễn Văn A
+```
+- Xóa đánh dấu "x" và lý do, cán bộ được đưa lại vào danh sách khi chạy `/auto_schedule`.
+- Nếu cán bộ vốn không bị miễn, bot sẽ báo "không có gì để thay đổi" (không lỗi).
+
+**Sửa tên cán bộ ghi sai:**
+```bash
+/edit_officer "Nguyễn Văn A" "Nguyễn Văn B"
+```
+- Đặt cả 2 tên trong dấu ngoặc kép.
+- Bot tự động đồng bộ tên mới vào: sheet "DS trực", sheet "Tổng" (nếu đã có), **tất cả các ca đã phân công sẵn trong các sheet tháng** (Trực sáng/chiều/Lãnh đạo), và danh sách liên hệ Telegram (`officers_contact`) nếu cán bộ đã từng `/register` — để không bị gián đoạn nhận thông báo.
+- Báo lỗi nếu tên mới đã trùng với một người khác trong DS trực.
+- Lịch sử đổi ca cũ (`/change`, `/swap`) và lịch sử thông báo đã gửi trước đó **không** bị sửa lại (giữ nguyên như một nhật ký, đúng với tên đã dùng tại thời điểm đó).
+
+> [!NOTE]
+> Cả 5 lệnh trên đều thao tác trên file của **năm hiện tại** (`current_year`). Nếu cần sửa DS trực của năm khác, dùng `/set_current_year` để chuyển trước.
+
+---
+
+## 📅 5. TỰ ĐỘNG XẾP LỊCH (ADMIN)
 Hệ thống hỗ trợ tính năng tự động xếp lịch theo vòng tròn (Round-robin) giúp tiết kiệm thời gian.
 
 **Đặc điểm:**
@@ -134,14 +190,14 @@ Hệ thống hỗ trợ tính năng tự động xếp lịch theo vòng tròn (
 
 ---
 
-## 🔔 5. THÔNG BÁO TỰ ĐỘNG
+## 🔔 6. THÔNG BÁO TỰ ĐỘNG
 * **Thời gian**: Hệ thống tự động kiểm tra và nhắc lịch vào lúc **16:00** hàng ngày cho ngày hôm sau.
 * **Đăng ký**: Cần chạy lệnh `/register` một lần duy nhất để hệ thống ghi nhận Telegram ID của bạn.
 * **Xếp lịch tự động hàng tháng**: Hệ thống tự động xếp lịch cho tháng tiếp theo vào ngày 23 hàng tháng (cấu hình trong `config.py`).
 
 ---
 
-## 🚀 6. VẬN HÀNH BOT
+## 🚀 7. VẬN HÀNH BOT
 
 ```bash
 python bot.py
@@ -149,15 +205,19 @@ python bot.py
 
 ---
 
-## ❓ 7. CÂU HỎI THƯỜNG GẶP (FAQ)
+## ❓ 8. CÂU HỎI THƯỜNG GẶP (FAQ)
 * **Q: Dữ liệu lịch trực lưu ở đâu?**
   - A: Dữ liệu lịch trực được lưu trong file Excel tại thư mục `lich-truc-ban/`. Các log thông báo, lịch sử đổi ca và danh sách năm học (`available_years`) được lưu trong database `truc_ban.db`.
 * **Q: Làm sao để thêm cán bộ mới?**
-  - A: Thêm tên cán bộ vào sheet `DS trực` trong file Excel. Cán bộ cũng cần chạy lệnh `/register` trên Telegram để nhận thông báo.
+  - A: Dùng lệnh `/add_officer [Họ tên]` (xem mục 4), hoặc thêm trực tiếp vào sheet `DS trực` trong file Excel. Cán bộ cũng cần chạy lệnh `/register` trên Telegram để nhận thông báo.
 * **Q: Ai có quyền Admin?**
   - A: Cấu hình danh sách Admin ID trong file `config.py` tại biến `ADMIN_IDS`.
 * **Q: Làm sao để chuyển sang năm học mới?**
   - A: Dùng lệnh `/start_new_year [year]` (xem mục 3). Không cần sửa `config.py` nữa.
+* **Q: Cán bộ nghỉ việc/chuyển công tác thì xử lý thế nào?**
+  - A: Dùng `/remove_officer [Họ tên]` để xóa hẳn khỏi DS trực, hoặc `/deactive_officer "[Họ tên]" "[Lý do]"` nếu chỉ tạm miễn trực một thời gian (vẫn giữ tên trong danh sách). Dùng `/active_officer [Họ tên]` khi cán bộ quay lại trực bình thường.
+* **Q: Lỡ ghi sai tên cán bộ trong DS trực thì sửa thế nào?**
+  - A: Dùng `/edit_officer "[Tên cũ]" "[Tên mới]"` — không nên xóa rồi thêm lại, vì lệnh này còn tự động sửa tên trong các ca đã phân công sẵn ở sheet tháng.
 
 ---
 *Chúc bạn quản lý trực ban hiệu quả!*
